@@ -2,7 +2,9 @@
 using Microsoft.EntityFrameworkCore;
 using FinancialAdvisorAI.API.Services;
 using FinancialAdvisorAI.API.Repositories;
+using FinancialAdvisorAI.API.Models;
 using FinancialAdvisorAI.API.Models.DTOs;
+using OpenAI.ObjectModels.RequestModels;
 
 // Alias to avoid confusion between our ChatMessage entity and OpenAI's ChatMessage
 using DbChatMessage = FinancialAdvisorAI.API.Models.ChatMessage;
@@ -62,8 +64,9 @@ namespace FinancialAdvisorAI.API.Controllers
                         : OpenAIChatMessage.FromAssistant(m.Content))
                     .ToList();
 
-                // Get AI response
-                var aiResponse = await _aiChatService.GetSimpleResponseAsync(
+                // Get AI response WITH email context
+                var aiResponse = await _aiChatService.GetResponseWithEmailContextAsync(
+                    request.UserId,
                     request.Message,
                     conversationHistory
                 );
