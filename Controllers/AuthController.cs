@@ -2,7 +2,6 @@
 using FinancialAdvisorAI.API.Models.DTOs;
 using FinancialAdvisorAI.API.Repositories;
 using FinancialAdvisorAI.API.Services;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -122,5 +121,4 @@ namespace FinancialAdvisorAI.API.Controllers
     }
 
 
-}
 }

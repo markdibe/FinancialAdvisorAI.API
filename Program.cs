@@ -23,12 +23,16 @@ builder.Services.AddScoped<GoogleAuthService>();
 
 
 // Configure CORS to allow Angular app
+
+var frontendUrl = builder.Configuration["Frontend:Url"] ?? "http://localhost:4200";
+
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngularApp",
         policy =>
         {
-            policy.WithOrigins("http://localhost:4200")
+            policy.WithOrigins(frontendUrl)
                   .AllowAnyHeader()
                   .AllowAnyMethod()
                   .AllowCredentials();
@@ -51,6 +55,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapFallbackToFile("index.html");
+
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
