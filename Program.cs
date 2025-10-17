@@ -21,6 +21,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 //register services 
 builder.Services.AddScoped<GoogleAuthService>();
 builder.Services.AddScoped<AiChatService>();
+builder.Services.AddScoped<EmailService>();
 
 // Configure CORS to allow Angular app
 

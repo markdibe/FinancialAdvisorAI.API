@@ -14,6 +14,7 @@ namespace FinancialAdvisorAI.API.Repositories
         public DbSet<ChatMessage> ChatMessages { get; set; }
         public DbSet<OngoingInstruction> OngoingInstructions { get; set; }
         public DbSet<AgentTask> AgentTasks { get; set; }
+        public DbSet<EmailCache> EmailCaches { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -54,6 +55,17 @@ namespace FinancialAdvisorAI.API.Repositories
             {
                 entity.HasKey(e => e.Id);
                 entity.Property(e => e.Description).IsRequired();
+                entity.HasOne(e => e.User)
+                      .WithMany()
+                      .HasForeignKey(e => e.UserId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<EmailCache>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.MessageId).IsRequired();
+                entity.HasIndex(e => new { e.UserId, e.MessageId }).IsUnique();
                 entity.HasOne(e => e.User)
                       .WithMany()
                       .HasForeignKey(e => e.UserId)
