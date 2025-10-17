@@ -1,0 +1,6 @@
+@FinancialAdvisorAI.API_HostAddress = http://localhost:5288
+
+GET {{FinancialAdvisorAI.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
