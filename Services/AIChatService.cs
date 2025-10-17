@@ -1,26 +1,28 @@
-﻿using OpenAI;
-using OpenAI.Managers;
+﻿using OpenAI.Managers;
 using OpenAI.ObjectModels;
 using OpenAI.ObjectModels.RequestModels;
 
+// Alias for clarity
+using OpenAIChatMessage = OpenAI.ObjectModels.RequestModels.ChatMessage;
+
 namespace FinancialAdvisorAI.API.Services
 {
-    public class AIChatService
+    public class AiChatService
     {
-        private readonly OpenAIService   _openAIClient;
+        private readonly OpenAI.Managers.OpenAIService _openAIClient;
         private readonly IConfiguration _configuration;
 
-        public AIChatService(IConfiguration configuration)
+        public AiChatService(IConfiguration configuration)
         {
             _configuration = configuration;
             var apiKey = _configuration["OpenAI:ApiKey"];
-            _openAIClient = new OpenAIService(new OpenAiOptions()
+            _openAIClient = new OpenAI.Managers.OpenAIService(new OpenAI.OpenAiOptions()
             {
                 ApiKey = apiKey
             });
         }
 
-        public async Task<string> GetChatCompletionAsync(List<ChatMessage> messages)
+        public async Task<string> GetChatCompletionAsync(List<OpenAIChatMessage> messages)
         {
             try
             {
@@ -48,12 +50,11 @@ namespace FinancialAdvisorAI.API.Services
             }
         }
 
-
-        public async Task<string> GetSimpleResponseAsync(string userMessage, List<ChatMessage>? conversationHistory = null)
+        public async Task<string> GetSimpleResponseAsync(string userMessage, List<OpenAIChatMessage>? conversationHistory = null)
         {
-            var messages = new List<ChatMessage>
+            var messages = new List<OpenAIChatMessage>
             {
-                ChatMessage.FromSystem("You are a helpful AI assistant for a financial advisor. " +
+                OpenAIChatMessage.FromSystem("You are a helpful AI assistant for a financial advisor. " +
                     "You help manage client relationships, schedule meetings, and provide information about clients. " +
                     "Be professional, concise, and helpful.")
             };
@@ -65,12 +66,9 @@ namespace FinancialAdvisorAI.API.Services
             }
 
             // Add current user message
-            messages.Add(ChatMessage.FromUser(userMessage));
+            messages.Add(OpenAIChatMessage.FromUser(userMessage));
 
             return await GetChatCompletionAsync(messages);
         }
-
-
-
     }
 }
