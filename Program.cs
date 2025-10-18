@@ -24,6 +24,9 @@ builder.Services.AddScoped<AiChatService>();
 builder.Services.AddScoped<EmailService>();
 builder.Services.AddScoped<EventService>();
 builder.Services.AddScoped<HubSpotService>();
+builder.Services.AddSingleton<EmbeddingService>();
+builder.Services.AddSingleton<QdrantService>();
+builder.Services.AddScoped<VectorSyncService>();
 
 
 // Configure CORS to allow Angular app
