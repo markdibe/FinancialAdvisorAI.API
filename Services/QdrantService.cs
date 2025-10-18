@@ -1,5 +1,4 @@
-﻿using Microsoft.OpenApi.Extensions;
-using Qdrant.Client;
+﻿using Qdrant.Client;
 using Qdrant.Client.Grpc;
 
 namespace FinancialAdvisorAI.API.Services
@@ -22,12 +21,16 @@ namespace FinancialAdvisorAI.API.Services
             var qdrantUrl = _configuration["Qdrant:Url"];
             var apiKey = _configuration["Qdrant:ApiKey"];
 
+            // Remove https:// and port from URL if present
             var uri = new Uri(qdrantUrl!);
             var host = uri.Host;
+
+            _logger.LogInformation("Connecting to Qdrant at: {Host}", host);
+
             _client = new QdrantClient(
                 host: host,
-                apiKey: apiKey,
-                https: true
+                https: true,
+                apiKey: apiKey
             );
 
             InitializeCollectionAsync().Wait();
@@ -61,6 +64,18 @@ namespace FinancialAdvisorAI.API.Services
                 {
                     _logger.LogInformation("Collection {CollectionName} already exists", _collectionName);
                 }
+
+                var collectionInfos = await _client.GetCollectionInfoAsync(_collectionName);
+
+                //await _client.DeletePayloadIndexAsync(_collectionName, "user_id");
+
+
+                if (!collectionInfos.PayloadSchema.ContainsKey("user_id"))
+                {
+
+                    await _client.CreatePayloadIndexAsync(_collectionName, "user_id", PayloadSchemaType.Integer);
+                }
+
             }
             catch (Exception ex)
             {
@@ -76,16 +91,22 @@ namespace FinancialAdvisorAI.API.Services
         {
             try
             {
+                // Generate a numeric ID from the string
+                var numericId = GenerateNumericId(id);
+
                 var point = new PointStruct
                 {
-                    Id = new PointId { Uuid = id },
+                    Id = numericId,
                     Vectors = vector,
                     Payload = { }
                 };
 
+                // Add the original ID as a payload field
+                point.Payload["original_id"] = ConvertToValue(id);
+
                 foreach (var kvp in payload)
                 {
-                    point.Payload[kvp.Key] = (Value)kvp.Value;
+                    point.Payload[kvp.Key] = ConvertToValue(kvp.Value);
                 }
 
                 await _client.UpsertAsync(
@@ -104,41 +125,91 @@ namespace FinancialAdvisorAI.API.Services
         {
             try
             {
-                var qdrantPoints = points.Select(p =>
+                _logger.LogInformation("Starting to upsert {Count} points", points.Count);
+
+                var qdrantPoints = new List<PointStruct>();
+
+                foreach (var p in points)
                 {
-                    var point = new PointStruct
+                    try
                     {
-                        Id = new PointId { Uuid = p.id },
-                        Vectors = p.vector,
-                        Payload = { }
-                    };
+                        // Generate a numeric ID from the string
+                        var numericId = GenerateNumericId(p.id);
 
-                    foreach (var kvp in p.payload)
-                    {
-                        point.Payload[kvp.Key] = (Value)kvp.Value;
+                        var point = new PointStruct
+                        {
+                            Id = numericId,
+                            Vectors = p.vector,
+                            Payload = { }
+                        };
+
+                        // Add the original ID as a payload field so we can search by it
+                        point.Payload["original_id"] = ConvertToValue(p.id);
+
+                        foreach (var kvp in p.payload)
+                        {
+                            point.Payload[kvp.Key] = ConvertToValue(kvp.Value);
+                        }
+
+                        qdrantPoints.Add(point);
                     }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error creating point {Id}", p.id);
+                        throw;
+                    }
+                }
 
-                    return point;
-                }).ToList();
+                _logger.LogInformation("Created {Count} point structures", qdrantPoints.Count);
 
                 // Batch upsert (100 at a time to avoid limits)
                 var batchSize = 100;
                 for (int i = 0; i < qdrantPoints.Count; i += batchSize)
                 {
                     var batch = qdrantPoints.Skip(i).Take(batchSize).ToList();
+
+                    _logger.LogInformation("Upserting batch {Batch} with {Count} points", i / batchSize + 1, batch.Count);
+
                     await _client.UpsertAsync(
                         collectionName: _collectionName,
                         points: batch
                     );
 
-                    _logger.LogInformation("Upserted batch {Batch} ({Count} points)", i / batchSize + 1, batch.Count);
+                    _logger.LogInformation("✅ Upserted batch {Batch} ({Count} points)", i / batchSize + 1, batch.Count);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error upserting points to Qdrant");
+                _logger.LogError(ex, "Error upserting points to Qdrant. Exception: {Message}", ex.Message);
                 throw;
             }
+        }
+
+        // Helper method to generate a numeric ID from a string
+        private ulong GenerateNumericId(string id)
+        {
+            // Use GetHashCode and convert to positive ulong
+            var hash = id.GetHashCode();
+            if (hash < 0)
+            {
+                hash = -hash;
+            }
+            return (ulong)hash;
+        }
+
+        // Helper method to convert C# objects to Qdrant Value objects
+        private Value ConvertToValue(object obj)
+        {
+            return obj switch
+            {
+                string s => new Value { StringValue = s },
+                int i => new Value { IntegerValue = i },
+                long l => new Value { IntegerValue = l },
+                double d => new Value { DoubleValue = d },
+                float f => new Value { DoubleValue = f },
+                bool b => new Value { BoolValue = b },
+                _ => new Value { StringValue = obj?.ToString() ?? "" }
+            };
         }
 
         public async Task<List<ScoredPoint>> SearchAsync(
@@ -186,12 +257,24 @@ namespace FinancialAdvisorAI.API.Services
 
             foreach (var kvp in filterDict)
             {
+                var match = kvp.Value switch
+                {
+                    string s => new Match { Keyword = s },
+                    int i => new Match { Integer = 1 },
+                    long l => new Match { Integer = l },
+                    double d => new Match { Keyword = d.ToString() },
+                    float f => new Match { Keyword = f.ToString() },
+                    bool b => new Match { Boolean = b },
+                    _ => new Match { Keyword = "" }
+                };
+
                 conditions.Add(new Condition
                 {
+
                     Field = new FieldCondition
                     {
                         Key = kvp.Key,
-                        Match = new Match { Keyword = kvp.Value.ToString() }
+                        Match = match
                     }
                 });
             }
