@@ -53,20 +53,17 @@ namespace FinancialAdvisorAI.API.Controllers
 
                 await _hubspotService.ExchangeCodeForTokenAsync(request.Code, user);
 
-                // Start initial sync in background
-                _ = Task.Run(async () =>
+                try
                 {
-                    try
-                    {
-                        await _hubspotService.SyncContactsAsync(user);
-                        await _hubspotService.SyncCompaniesAsync(user);
-                        await _hubspotService.SyncDealsAsync(user);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error during initial HubSpot sync");
-                    }
-                });
+                    await _hubspotService.SyncContactsAsync(user);
+                    await _hubspotService.SyncCompaniesAsync(user);
+                    await _hubspotService.SyncDealsAsync(user);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error during initial HubSpot sync");
+                }
+
 
                 return Ok(new
                 {
@@ -95,21 +92,9 @@ namespace FinancialAdvisorAI.API.Controllers
                 {
                     return NotFound(new { error = "User not found" });
                 }
-
-                // Run sync in background
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await _hubspotService.SyncContactsAsync(user);
-                        await _hubspotService.SyncCompaniesAsync(user);
-                        await _hubspotService.SyncDealsAsync(user);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error during HubSpot sync");
-                    }
-                });
+                await _hubspotService.SyncContactsAsync(user);
+                await _hubspotService.SyncCompaniesAsync(user);
+                await _hubspotService.SyncDealsAsync(user);
 
                 return Ok(new
                 {

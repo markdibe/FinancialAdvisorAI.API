@@ -27,7 +27,7 @@ namespace FinancialAdvisorAI.API.Services
         {
             var clientId = _configuration["Hubspot:ClientId"];
             var redirectUri = _configuration["Hubspot:RedirectUri"];
-            var scopes = _configuration["Hubspot:Scope"];
+            var scopes = _configuration["Hubspot:Scopes"];
 
             return $"https://app.hubspot.com/oauth/authorize?" +
                    $"client_id={Uri.EscapeDataString(clientId)}" +
@@ -35,7 +35,6 @@ namespace FinancialAdvisorAI.API.Services
                    $"&scope={Uri.EscapeDataString(scopes)}" +
                    $"&state={state}";
         }
-
 
         public async Task ExchangeCodeForTokenAsync(string code, User user)
         {
@@ -114,22 +113,69 @@ namespace FinancialAdvisorAI.API.Services
             var accessToken = await GetValidAccessTokenAsync(user);
             var client = new RestClient(BASE_URL);
 
-            var request = new RestRequest("/crm/v3/objects/contacts", Method.Get);
-            request.AddHeader("Authorization", $"Bearer {accessToken}");
-            request.AddParameter("limit", "100");
-            request.AddParameter("properties", "firstname,lastname,email,phone,company,jobtitle,lifecyclestage,lastmodifieddate");
+            var allContacts = new List<JsonElement>();
+            string? after = null;
+            var hasMore = true;
+            var pageCount = 0;
 
-            var response = await client.ExecuteAsync(request);
+            _logger.LogInformation("Starting HubSpot contacts sync for user {UserId}", user.Id);
 
-            if (!response.IsSuccessful)
+            // Paginate through all contacts
+            while (hasMore)
             {
-                throw new Exception($"Failed to fetch contacts: {response.Content}");
+                pageCount++;
+                var request = new RestRequest("/crm/v3/objects/contacts", Method.Get);
+                request.AddHeader("Authorization", $"Bearer {accessToken}");
+                request.AddParameter("limit", "100");
+                request.AddParameter("properties", "firstname,lastname,email,phone,company,jobtitle,lifecyclestage,lastmodifieddate");
+
+                if (!string.IsNullOrEmpty(after))
+                {
+                    request.AddParameter("after", after);
+                }
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                {
+                    _logger.LogError("Failed to fetch contacts page {Page}: {Error}", pageCount, response.Content);
+                    throw new Exception($"Failed to fetch contacts: {response.Content}");
+                }
+
+                var data = JsonSerializer.Deserialize<JsonElement>(response.Content!);
+                var results = data.GetProperty("results");
+
+                foreach (var contact in results.EnumerateArray())
+                {
+                    allContacts.Add(contact);
+                }
+
+                _logger.LogInformation("Fetched page {Page} with {Count} contacts", pageCount, results.GetArrayLength());
+
+                // Check if there are more pages
+                if (data.TryGetProperty("paging", out var paging) &&
+                    paging.TryGetProperty("next", out var next) &&
+                    next.TryGetProperty("after", out var afterValue))
+                {
+                    after = afterValue.GetString();
+                    hasMore = true;
+                }
+                else
+                {
+                    hasMore = false;
+                }
+
+                // Small delay to respect rate limits
+                await Task.Delay(100);
             }
 
-            var data = JsonSerializer.Deserialize<JsonElement>(response.Content!);
-            var results = data.GetProperty("results");
+            _logger.LogInformation("Fetched {Count} total contacts from HubSpot in {Pages} pages", allContacts.Count, pageCount);
 
-            foreach (var contact in results.EnumerateArray())
+            // Now process all contacts
+            var newCount = 0;
+            var updateCount = 0;
+
+            foreach (var contact in allContacts)
             {
                 var properties = contact.GetProperty("properties");
                 var hubspotId = contact.GetProperty("id").GetString()!;
@@ -141,6 +187,7 @@ namespace FinancialAdvisorAI.API.Services
                 {
                     UpdateContactProperties(existingContact, properties);
                     existingContact.UpdatedAt = DateTime.UtcNow;
+                    updateCount++;
                 }
                 else
                 {
@@ -153,62 +200,13 @@ namespace FinancialAdvisorAI.API.Services
                     };
                     UpdateContactProperties(newContact, properties);
                     _context.HubSpotContacts.Add(newContact);
+                    newCount++;
                 }
             }
 
             await _context.SaveChangesAsync();
-            _logger.LogInformation("Synced HubSpot contacts for user {UserId}", user.Id);
-        }
-
-        public async Task SyncDealsAsync(User user)
-        {
-            var accessToken = await GetValidAccessTokenAsync(user);
-            var client = new RestClient(BASE_URL);
-
-            var request = new RestRequest("/crm/v3/objects/deals", Method.Get);
-            request.AddHeader("Authorization", $"Bearer {accessToken}");
-            request.AddParameter("limit", "100");
-            request.AddParameter("properties", "dealname,dealstage,pipeline,amount,closedate,hs_priority,lastmodifieddate");
-
-            var response = await client.ExecuteAsync(request);
-
-            if (!response.IsSuccessful)
-            {
-                throw new Exception($"Failed to fetch deals: {response.Content}");
-            }
-
-            var data = JsonSerializer.Deserialize<JsonElement>(response.Content!);
-            var results = data.GetProperty("results");
-
-            foreach (var deal in results.EnumerateArray())
-            {
-                var properties = deal.GetProperty("properties");
-                var hubspotId = deal.GetProperty("id").GetString()!;
-
-                var existingDeal = await _context.HubSpotDeals
-                    .FirstOrDefaultAsync(d => d.UserId == user.Id && d.HubSpotId == hubspotId);
-
-                if (existingDeal != null)
-                {
-                    UpdateDealProperties(existingDeal, properties);
-                    existingDeal.UpdatedAt = DateTime.UtcNow;
-                }
-                else
-                {
-                    var newDeal = new HubSpotDeal
-                    {
-                        UserId = user.Id,
-                        HubSpotId = hubspotId,
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow
-                    };
-                    UpdateDealProperties(newDeal, properties);
-                    _context.HubSpotDeals.Add(newDeal);
-                }
-            }
-
-            await _context.SaveChangesAsync();
-            _logger.LogInformation("Synced HubSpot deals for user {UserId}", user.Id);
+            _logger.LogInformation("Synced {Total} HubSpot contacts for user {UserId} (New: {New}, Updated: {Updated})",
+                allContacts.Count, user.Id, newCount, updateCount);
         }
 
         private void UpdateContactProperties(HubSpotContact contact, JsonElement properties)
@@ -228,28 +226,72 @@ namespace FinancialAdvisorAI.API.Services
             }
         }
 
-
         public async Task SyncCompaniesAsync(User user)
         {
             var accessToken = await GetValidAccessTokenAsync(user);
             var client = new RestClient(BASE_URL);
 
-            var request = new RestRequest("/crm/v3/objects/companies", Method.Get);
-            request.AddHeader("Authorization", $"Bearer {accessToken}");
-            request.AddParameter("limit", "100");
-            request.AddParameter("properties", "name,domain,industry,city,state,country,numberofemployees,annualrevenue,lastmodifieddate");
+            var allCompanies = new List<JsonElement>();
+            string? after = null;
+            var hasMore = true;
+            var pageCount = 0;
 
-            var response = await client.ExecuteAsync(request);
+            _logger.LogInformation("Starting HubSpot companies sync for user {UserId}", user.Id);
 
-            if (!response.IsSuccessful)
+            // Paginate through all companies
+            while (hasMore)
             {
-                throw new Exception($"Failed to fetch companies: {response.Content}");
+                pageCount++;
+                var request = new RestRequest("/crm/v3/objects/companies", Method.Get);
+                request.AddHeader("Authorization", $"Bearer {accessToken}");
+                request.AddParameter("limit", "100");
+                request.AddParameter("properties", "name,domain,industry,city,state,country,numberofemployees,annualrevenue,lastmodifieddate");
+
+                if (!string.IsNullOrEmpty(after))
+                {
+                    request.AddParameter("after", after);
+                }
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                {
+                    _logger.LogError("Failed to fetch companies page {Page}: {Error}", pageCount, response.Content);
+                    throw new Exception($"Failed to fetch companies: {response.Content}");
+                }
+
+                var data = JsonSerializer.Deserialize<JsonElement>(response.Content!);
+                var results = data.GetProperty("results");
+
+                foreach (var company in results.EnumerateArray())
+                {
+                    allCompanies.Add(company);
+                }
+
+                _logger.LogInformation("Fetched page {Page} with {Count} companies", pageCount, results.GetArrayLength());
+
+                // Check if there are more pages
+                if (data.TryGetProperty("paging", out var paging) &&
+                    paging.TryGetProperty("next", out var next) &&
+                    next.TryGetProperty("after", out var afterValue))
+                {
+                    after = afterValue.GetString();
+                    hasMore = true;
+                }
+                else
+                {
+                    hasMore = false;
+                }
+
+                await Task.Delay(100);
             }
 
-            var data = JsonSerializer.Deserialize<JsonElement>(response.Content!);
-            var results = data.GetProperty("results");
+            _logger.LogInformation("Fetched {Count} total companies from HubSpot in {Pages} pages", allCompanies.Count, pageCount);
 
-            foreach (var company in results.EnumerateArray())
+            var newCount = 0;
+            var updateCount = 0;
+
+            foreach (var company in allCompanies)
             {
                 var properties = company.GetProperty("properties");
                 var hubspotId = company.GetProperty("id").GetString()!;
@@ -261,6 +303,7 @@ namespace FinancialAdvisorAI.API.Services
                 {
                     UpdateCompanyProperties(existingCompany, properties);
                     existingCompany.UpdatedAt = DateTime.UtcNow;
+                    updateCount++;
                 }
                 else
                 {
@@ -273,11 +316,13 @@ namespace FinancialAdvisorAI.API.Services
                     };
                     UpdateCompanyProperties(newCompany, properties);
                     _context.HubSpotCompanies.Add(newCompany);
+                    newCount++;
                 }
             }
 
             await _context.SaveChangesAsync();
-            _logger.LogInformation("Synced HubSpot companies for user {UserId}", user.Id);
+            _logger.LogInformation("Synced {Total} HubSpot companies for user {UserId} (New: {New}, Updated: {Updated})",
+                allCompanies.Count, user.Id, newCount, updateCount);
         }
 
         private void UpdateCompanyProperties(HubSpotCompany company, JsonElement properties)
@@ -308,6 +353,104 @@ namespace FinancialAdvisorAI.API.Services
             }
         }
 
+        public async Task SyncDealsAsync(User user)
+        {
+            var accessToken = await GetValidAccessTokenAsync(user);
+            var client = new RestClient(BASE_URL);
+
+            var allDeals = new List<JsonElement>();
+            string? after = null;
+            var hasMore = true;
+            var pageCount = 0;
+
+            _logger.LogInformation("Starting HubSpot deals sync for user {UserId}", user.Id);
+
+            // Paginate through all deals
+            while (hasMore)
+            {
+                pageCount++;
+                var request = new RestRequest("/crm/v3/objects/deals", Method.Get);
+                request.AddHeader("Authorization", $"Bearer {accessToken}");
+                request.AddParameter("limit", "100");
+                request.AddParameter("properties", "dealname,dealstage,pipeline,amount,closedate,hs_priority,lastmodifieddate");
+
+                if (!string.IsNullOrEmpty(after))
+                {
+                    request.AddParameter("after", after);
+                }
+
+                var response = await client.ExecuteAsync(request);
+
+                if (!response.IsSuccessful)
+                {
+                    _logger.LogError("Failed to fetch deals page {Page}: {Error}", pageCount, response.Content);
+                    throw new Exception($"Failed to fetch deals: {response.Content}");
+                }
+
+                var data = JsonSerializer.Deserialize<JsonElement>(response.Content!);
+                var results = data.GetProperty("results");
+
+                foreach (var deal in results.EnumerateArray())
+                {
+                    allDeals.Add(deal);
+                }
+
+                _logger.LogInformation("Fetched page {Page} with {Count} deals", pageCount, results.GetArrayLength());
+
+                // Check if there are more pages
+                if (data.TryGetProperty("paging", out var paging) &&
+                    paging.TryGetProperty("next", out var next) &&
+                    next.TryGetProperty("after", out var afterValue))
+                {
+                    after = afterValue.GetString();
+                    hasMore = true;
+                }
+                else
+                {
+                    hasMore = false;
+                }
+
+                await Task.Delay(100);
+            }
+
+            _logger.LogInformation("Fetched {Count} total deals from HubSpot in {Pages} pages", allDeals.Count, pageCount);
+
+            var newCount = 0;
+            var updateCount = 0;
+
+            foreach (var deal in allDeals)
+            {
+                var properties = deal.GetProperty("properties");
+                var hubspotId = deal.GetProperty("id").GetString()!;
+
+                var existingDeal = await _context.HubSpotDeals
+                    .FirstOrDefaultAsync(d => d.UserId == user.Id && d.HubSpotId == hubspotId);
+
+                if (existingDeal != null)
+                {
+                    UpdateDealProperties(existingDeal, properties);
+                    existingDeal.UpdatedAt = DateTime.UtcNow;
+                    updateCount++;
+                }
+                else
+                {
+                    var newDeal = new HubSpotDeal
+                    {
+                        UserId = user.Id,
+                        HubSpotId = hubspotId,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow
+                    };
+                    UpdateDealProperties(newDeal, properties);
+                    _context.HubSpotDeals.Add(newDeal);
+                    newCount++;
+                }
+            }
+
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("Synced {Total} HubSpot deals for user {UserId} (New: {New}, Updated: {Updated})",
+                allDeals.Count, user.Id, newCount, updateCount);
+        }
 
         private void UpdateDealProperties(HubSpotDeal deal, JsonElement properties)
         {
@@ -349,6 +492,5 @@ namespace FinancialAdvisorAI.API.Services
             var user = await _context.Users.FindAsync(userId);
             return user != null && !string.IsNullOrEmpty(user.HubspotAccessToken);
         }
-
     }
 }
