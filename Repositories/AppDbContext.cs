@@ -17,6 +17,10 @@ namespace FinancialAdvisorAI.API.Repositories
         public DbSet<EmailCache> EmailCaches { get; set; }
         public DbSet<CalendarEventCache> CalendarEventCaches { get; set; }
 
+        public DbSet<HubSpotContact> HubSpotContacts { get; set; }
+        public DbSet<HubSpotCompany> HubSpotCompanies { get; set; }
+        public DbSet<HubSpotDeal> HubSpotDeals { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -81,6 +85,41 @@ namespace FinancialAdvisorAI.API.Repositories
                 entity.Property(e => e.EventId).IsRequired();
                 entity.Property(e => e.Summary).IsRequired();
                 entity.HasIndex(e => new { e.UserId, e.EventId }).IsUnique();
+                entity.HasOne(e => e.User)
+                      .WithMany()
+                      .HasForeignKey(e => e.UserId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<HubSpotContact>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.HubSpotId).IsRequired();
+                entity.HasIndex(e => new { e.UserId, e.HubSpotId }).IsUnique();
+                entity.HasOne(e => e.User)
+                      .WithMany()
+                      .HasForeignKey(e => e.UserId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // NEW: Configure HubSpotCompany entity
+            modelBuilder.Entity<HubSpotCompany>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.HubSpotId).IsRequired();
+                entity.HasIndex(e => new { e.UserId, e.HubSpotId }).IsUnique();
+                entity.HasOne(e => e.User)
+                      .WithMany()
+                      .HasForeignKey(e => e.UserId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // NEW: Configure HubSpotDeal entity
+            modelBuilder.Entity<HubSpotDeal>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.HubSpotId).IsRequired();
+                entity.HasIndex(e => new { e.UserId, e.HubSpotId }).IsUnique();
                 entity.HasOne(e => e.User)
                       .WithMany()
                       .HasForeignKey(e => e.UserId)
