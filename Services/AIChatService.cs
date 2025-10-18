@@ -4,9 +4,11 @@ using OpenAI.ObjectModels.RequestModels;
 using Microsoft.EntityFrameworkCore;
 using FinancialAdvisorAI.API.Repositories;
 using System.Text.Json;
+using System.Text;
 
 // Alias for clarity
 using OpenAIChatMessage = OpenAI.ObjectModels.RequestModels.ChatMessage;
+using Qdrant.Client.Grpc;
 
 namespace FinancialAdvisorAI.API.Services
 {
@@ -16,15 +18,25 @@ namespace FinancialAdvisorAI.API.Services
         private readonly IConfiguration _configuration;
         private readonly AppDbContext _context;
         private readonly ILogger<AiChatService> _logger;
+        private readonly EmbeddingService? _embeddingService;
+        private readonly QdrantService? _qdrantService;
+        private readonly bool _useRAG;
 
         public AiChatService(
             IConfiguration configuration,
             AppDbContext context,
-            ILogger<AiChatService> logger)
+            ILogger<AiChatService> logger,
+            EmbeddingService? embeddingService = null,
+            QdrantService? qdrantService = null)
         {
             _configuration = configuration;
             _context = context;
             _logger = logger;
+            _embeddingService = embeddingService;
+            _qdrantService = qdrantService;
+
+            // Enable RAG only if both services are available
+            _useRAG = _embeddingService != null && _qdrantService != null;
 
             var apiKey = _configuration["OpenAI:ApiKey"];
             _openAIClient = new OpenAI.Managers.OpenAIService(new OpenAI.OpenAiOptions()
@@ -61,6 +73,100 @@ namespace FinancialAdvisorAI.API.Services
             }
         }
 
+        // NEW: Main entry point - uses RAG if available, otherwise falls back to keyword search
+        public async Task<string> GetResponseWithContextAsync(
+            int userId,
+            string userMessage,
+            List<OpenAIChatMessage>? conversationHistory = null)
+        {
+            if (_useRAG)
+            {
+                try
+                {
+                    _logger.LogInformation("Using RAG (semantic search) for query");
+                    return await GetResponseWithRAGAsync(userId, userMessage, conversationHistory);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "RAG failed, falling back to keyword search");
+                    // Fall back to keyword search if RAG fails
+                    return await GetResponseWithEmailContextAsync(userId, userMessage, conversationHistory);
+                }
+            }
+            else
+            {
+                _logger.LogInformation("RAG not available, using keyword search");
+                return await GetResponseWithEmailContextAsync(userId, userMessage, conversationHistory);
+            }
+        }
+
+        // NEW: RAG-based response (semantic search using Qdrant)
+        private async Task<string> GetResponseWithRAGAsync(
+            int userId,
+            string userMessage,
+            List<OpenAIChatMessage>? conversationHistory = null)
+        {
+            // Generate embedding for the user's query
+            var queryEmbedding = await _embeddingService!.GenerateEmbeddingAsync(userMessage);
+
+            List<ScoredPoint> searchResults = new List<ScoredPoint>();
+
+            // Search Qdrant for relevant context
+            try
+            {
+                searchResults = await _qdrantService!.SearchAsync(
+                queryVector: queryEmbedding,
+                limit: 10,
+                filter: new Dictionary<string, object> { { "user_id", userId } }
+            );
+            }
+            catch(Exception e)
+            {
+                throw;
+            }
+
+            // Build context from search results
+            var contextBuilder = new StringBuilder();
+            contextBuilder.AppendLine("RELEVANT INFORMATION FROM YOUR DATA:\n");
+
+            foreach (var result in searchResults)
+            {
+                var type = result.Payload["type"].StringValue;
+                var content = result.Payload["content"].StringValue;
+                var score = result.Score;
+
+                contextBuilder.AppendLine($"[{type.ToUpper()} - Relevance: {score:F2}]");
+                contextBuilder.AppendLine(content);
+                contextBuilder.AppendLine();
+            }
+
+            _logger.LogInformation("Found {Count} relevant items using RAG", searchResults.Count);
+
+            // Build messages for GPT
+            var messages = new List<OpenAIChatMessage>
+            {
+                OpenAIChatMessage.FromSystem(
+                    "You are a helpful AI assistant for a financial advisor. " +
+                    "You help manage client relationships, answer questions about emails, meetings, and clients. " +
+                    "Use the provided context to answer questions accurately. " +
+                    "If you don't find relevant information in the context, say so honestly. " +
+                    "Be professional, concise, and helpful.\n\n" +
+                    contextBuilder.ToString())
+            };
+
+            // Add conversation history if provided
+            if (conversationHistory != null && conversationHistory.Any())
+            {
+                messages.AddRange(conversationHistory);
+            }
+
+            // Add current user message
+            messages.Add(OpenAIChatMessage.FromUser(userMessage));
+
+            return await GetChatCompletionAsync(messages);
+        }
+
+        // KEEP YOUR EXISTING METHOD - Used as fallback
         public async Task<string> GetResponseWithEmailContextAsync(
             int userId,
             string userMessage,
@@ -101,7 +207,7 @@ namespace FinancialAdvisorAI.API.Services
         {
             try
             {
-                // Simple keyword search - we'll improve this with RAG later
+                // Simple keyword search
                 var keywords = ExtractKeywords(query);
 
                 var emails = await _context.EmailCaches
@@ -127,7 +233,6 @@ namespace FinancialAdvisorAI.API.Services
 
         private List<string> ExtractKeywords(string query)
         {
-            // Remove common words and extract meaningful keywords
             var commonWords = new HashSet<string> {
                 "who", "what", "when", "where", "why", "how", "is", "are", "was", "were",
                 "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -159,7 +264,6 @@ namespace FinancialAdvisorAI.API.Services
                 context += $"Date: {email.EmailDate?.ToString("MMMM d, yyyy")}\n";
                 context += $"Subject: {email.Subject}\n";
 
-                // Include snippet or first 500 chars of body
                 var preview = email.Snippet ?? email.Body ?? "";
                 if (preview.Length > 500)
                 {
@@ -175,7 +279,6 @@ namespace FinancialAdvisorAI.API.Services
         {
             try
             {
-                // Use GPT to analyze the query with schema awareness
                 var searchParams = await AnalyzeCalendarQueryAsync(query);
 
                 if (!searchParams.IsCalendarQuery)
@@ -189,7 +292,6 @@ namespace FinancialAdvisorAI.API.Services
                 var eventsQuery = _context.CalendarEventCaches
                     .Where(e => e.UserId == userId);
 
-                // Apply time filtering based on GPT's analysis
                 if (searchParams.Filters != null)
                 {
                     switch (searchParams.Filters.TimeFilter?.ToLower())
@@ -225,7 +327,6 @@ namespace FinancialAdvisorAI.API.Services
                             eventsQuery = eventsQuery.Where(e => e.StartTime < now);
                             break;
                         case "all":
-                            // No time filter - show all events
                             break;
                         case "upcoming":
                         default:
@@ -233,7 +334,6 @@ namespace FinancialAdvisorAI.API.Services
                             break;
                     }
 
-                    // Apply search terms to specified fields
                     if (searchParams.Filters.SearchTerms != null && searchParams.Filters.SearchTerms.Any())
                     {
                         var fields = searchParams.Filters.SearchFields ?? new List<string> { "Summary", "Description", "Location", "Attendees" };
@@ -247,7 +347,6 @@ namespace FinancialAdvisorAI.API.Services
                     }
                 }
 
-                // Apply ordering
                 if (searchParams.OrderDirection?.ToLower() == "desc")
                 {
                     eventsQuery = eventsQuery.OrderByDescending(e => e.StartTime);
@@ -261,7 +360,7 @@ namespace FinancialAdvisorAI.API.Services
                     .Take(searchParams.Limit ?? 10)
                     .ToListAsync();
 
-                _logger.LogInformation("Found {Count} calendar events using AI-generated query parameters", events.Count);
+                _logger.LogInformation("Found {Count} calendar events", events.Count);
 
                 return events;
             }
@@ -271,6 +370,7 @@ namespace FinancialAdvisorAI.API.Services
                 return new List<Models.CalendarEventCache>();
             }
         }
+
         private async Task<CalendarQueryParams> AnalyzeCalendarQueryAsync(string query)
         {
             try
@@ -278,49 +378,8 @@ namespace FinancialAdvisorAI.API.Services
                 var messages = new List<OpenAIChatMessage>
                 {
                     OpenAIChatMessage.FromSystem(
-                        "You are a database query analyzer. Given a user's natural language question and database schema, generate query parameters.\n\n" +
-                        "DATABASE SCHEMA - CalendarEventCache:\n" +
-                        "- EventId (string): Google Calendar event ID\n" +
-                        "- Summary (string): Event title/name\n" +
-                        "- Description (string): Event description\n" +
-                        "- Location (string): Event location\n" +
-                        "- StartTime (DateTime): Event start time\n" +
-                        "- EndTime (DateTime): Event end time\n" +
-                        "- Attendees (string): JSON array of attendee emails\n" +
-                        "- IsAllDay (bool): Whether event is all-day\n\n" +
-                        "INSTRUCTIONS:\n" +
-                        "1. Determine if this is a calendar/meeting query\n" +
-                        "2. Extract time filters (today, this_week, upcoming, past, last_week, yesterday, specific_date, etc.)\n" +
-                        "3. Identify which fields to search in and what terms to search for\n" +
-                        "4. Specify ordering and limits\n\n" +
-                        "Respond with ONLY valid JSON in this format:\n" +
-                        "{\n" +
-                        "  \"isCalendarQuery\": true/false,\n" +
-                        "  \"filters\": {\n" +
-                        "    \"timeFilter\": \"upcoming\" | \"today\" | \"tomorrow\" | \"yesterday\" | \"this_week\" | \"last_week\" | \"next_week\" | \"past\" | \"all\",\n" +
-                        "    \"searchFields\": [\"Summary\", \"Description\", \"Location\", \"Attendees\"],\n" +
-                        "    \"searchTerms\": [\"term1\", \"term2\"] or null,\n" +
-                        "    \"specificDate\": \"YYYY-MM-DD\" or null,\n" +
-                        "    \"startTimeAfter\": \"YYYY-MM-DD\" or null,\n" +
-                        "    \"startTimeBefore\": \"YYYY-MM-DD\" or null\n" +
-                        "  },\n" +
-                        "  \"orderBy\": \"StartTime\" | \"EndTime\",\n" +
-                        "  \"orderDirection\": \"asc\" | \"desc\",\n" +
-                        "  \"limit\": 10\n" +
-                        "}\n\n" +
-                        "EXAMPLES:\n" +
-                        "Q: 'What meetings do I have coming up?'\n" +
-                        "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"upcoming\", \"searchFields\": null, \"searchTerms\": null}, \"orderBy\": \"StartTime\", \"orderDirection\": \"asc\", \"limit\": 10}\n\n" +
-                        "Q: 'Do I have anything today?'\n" +
-                        "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"today\", \"searchFields\": null, \"searchTerms\": null}, \"orderBy\": \"StartTime\", \"orderDirection\": \"asc\", \"limit\": 20}\n\n" +
-                        "Q: 'Show me meetings with John about budget'\n" +
-                        "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"upcoming\", \"searchFields\": [\"Summary\", \"Description\", \"Attendees\"], \"searchTerms\": [\"john\", \"budget\"]}, \"orderBy\": \"StartTime\", \"orderDirection\": \"asc\", \"limit\": 10}\n\n" +
-                        "Q: 'Did I meet with Sara last week?'\n" +
-                        "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"last_week\", \"searchFields\": [\"Summary\", \"Attendees\"], \"searchTerms\": [\"sara\"]}, \"orderBy\": \"StartTime\", \"orderDirection\": \"desc\", \"limit\": 10}\n\n" +
-                        "Q: 'When was my last meeting with the client?'\n" +
-                        "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"past\", \"searchFields\": [\"Summary\", \"Description\"], \"searchTerms\": [\"client\"]}, \"orderBy\": \"StartTime\", \"orderDirection\": \"desc\", \"limit\": 5}\n\n" +
-                        "Q: 'What emails did I get?'\n" +
-                        "A: {\"isCalendarQuery\": false}"),
+                        "You are a database query analyzer. Analyze if this is a calendar query and respond with JSON.\n" +
+                        "Format: {\"isCalendarQuery\": true/false, \"filters\": {\"timeFilter\": \"upcoming\", \"searchTerms\": []}}"),
                     OpenAIChatMessage.FromUser(query)
                 };
 
@@ -336,8 +395,6 @@ namespace FinancialAdvisorAI.API.Services
                 if (completionResult.Successful)
                 {
                     var response = completionResult.Choices.First().Message.Content.Trim();
-                    _logger.LogInformation("Calendar query analysis: {Response}", response);
-
                     var result = JsonSerializer.Deserialize<CalendarQueryParams>(response, new JsonSerializerOptions
                     {
                         PropertyNameCaseInsensitive = true
@@ -354,7 +411,6 @@ namespace FinancialAdvisorAI.API.Services
                 return new CalendarQueryParams { IsCalendarQuery = false };
             }
         }
-
 
         private string BuildCalendarContext(List<Models.CalendarEventCache> events)
         {
@@ -402,7 +458,6 @@ namespace FinancialAdvisorAI.API.Services
             return context;
         }
 
-        // Keep the old method for backward compatibility
         public async Task<string> GetSimpleResponseAsync(string userMessage, List<OpenAIChatMessage>? conversationHistory = null)
         {
             var messages = new List<OpenAIChatMessage>
@@ -422,6 +477,7 @@ namespace FinancialAdvisorAI.API.Services
             return await GetChatCompletionAsync(messages);
         }
     }
+
     public class CalendarQueryParams
     {
         public bool IsCalendarQuery { get; set; }
@@ -440,5 +496,4 @@ namespace FinancialAdvisorAI.API.Services
         public string? StartTimeAfter { get; set; }
         public string? StartTimeBefore { get; set; }
     }
-
 }
