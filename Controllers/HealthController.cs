@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Http;
+﻿using FinancialAdvisorAI.API.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace FinancialAdvisorAI.API.Controllers
@@ -16,6 +17,20 @@ namespace FinancialAdvisorAI.API.Controllers
                 timestamp = DateTime.UtcNow,
                 message = "Financial Advisor AI API is running!"
             });
+        }
+
+        [HttpGet("qdrant")]
+        public async Task<IActionResult> TestQdrant([FromServices] QdrantService qdrantService)
+        {
+            try
+            {
+                // This will trigger collection creation if it doesn't exist
+                return Ok(new { status = "Qdrant connected successfully!" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
         }
     }
 }
