@@ -1,14 +1,14 @@
-﻿using OpenAI.Managers;
+﻿using FinancialAdvisorAI.API.Repositories;
+using Google.Apis.Gmail.v1;
+using Microsoft.EntityFrameworkCore;
+using OpenAI.Managers;
 using OpenAI.ObjectModels;
 using OpenAI.ObjectModels.RequestModels;
-using Microsoft.EntityFrameworkCore;
-using FinancialAdvisorAI.API.Repositories;
-using System.Text.Json;
+using Qdrant.Client.Grpc;
 using System.Text;
-
+using System.Text.Json;
 // Alias for clarity
 using OpenAIChatMessage = OpenAI.ObjectModels.RequestModels.ChatMessage;
-using Qdrant.Client.Grpc;
 
 namespace FinancialAdvisorAI.API.Services
 {
@@ -21,13 +21,18 @@ namespace FinancialAdvisorAI.API.Services
         private readonly EmbeddingService? _embeddingService;
         private readonly QdrantService? _qdrantService;
         private readonly bool _useRAG;
+        private readonly EmailService _emailService;
+        private readonly ToolExecutorService _toolExecutor;
 
         public AiChatService(
             IConfiguration configuration,
             AppDbContext context,
             ILogger<AiChatService> logger,
             EmbeddingService? embeddingService = null,
-            QdrantService? qdrantService = null)
+            QdrantService? qdrantService = null,
+            EmailService emailService = null,
+            ToolExecutorService toolExecutorService = null
+            )
         {
             _configuration = configuration;
             _context = context;
@@ -43,6 +48,8 @@ namespace FinancialAdvisorAI.API.Services
             {
                 ApiKey = apiKey
             });
+            _emailService = emailService;
+            _toolExecutor = toolExecutorService;
         }
 
         public async Task<string> GetChatCompletionAsync(List<OpenAIChatMessage> messages)
@@ -475,6 +482,154 @@ namespace FinancialAdvisorAI.API.Services
             messages.Add(OpenAIChatMessage.FromUser(userMessage));
 
             return await GetChatCompletionAsync(messages);
+        }
+        public async Task<string> GetResponseWithToolsAsync(
+    int userId,
+    string userMessage,
+    List<OpenAIChatMessage>? conversationHistory = null)
+        {
+            // STEP 1: Use RAG to get context (same as your existing GetResponseWithContextAsync)
+            if (_useRAG)
+            {
+                try
+                {
+                    _logger.LogInformation("Using RAG with tool calling capability");
+
+                    // Generate embedding for the user's query
+                    var queryEmbedding = await _embeddingService!.GenerateEmbeddingAsync(userMessage);
+
+                    // Search Qdrant for relevant context
+                    var searchResults = await _qdrantService!.SearchAsync(
+                        queryVector: queryEmbedding,
+                        limit: 10,
+                        filter: new Dictionary<string, object> { { "user_id", userId } }
+                    );
+
+                    // Build context from search results
+                    var contextBuilder = new StringBuilder();
+                    contextBuilder.AppendLine("RELEVANT INFORMATION FROM YOUR DATA:\n");
+
+                    foreach (var result in searchResults)
+                    {
+                        var type = result.Payload["type"].StringValue;
+                        var content = result.Payload["content"].StringValue;
+                        var score = result.Score;
+
+                        contextBuilder.AppendLine($"[{type.ToUpper()} - Relevance: {score:F2}]");
+                        contextBuilder.AppendLine(content);
+                        contextBuilder.AppendLine();
+                    }
+
+                    _logger.LogInformation("Found {Count} relevant items using RAG", searchResults.Count);
+
+                    // STEP 2: Build messages for GPT with system prompt
+                    var messages = new List<OpenAIChatMessage>
+            {
+                OpenAIChatMessage.FromSystem(
+                    "You are a helpful AI assistant for a financial advisor. " +
+                    "You help manage client relationships, answer questions about emails, meetings, and clients. " +
+                    "You can also perform actions like sending emails when the user asks. " +
+                    "Use the provided context to answer questions accurately. " +
+                    "When the user asks you to DO something (like send an email), use the available tools. " +
+                    "Be professional, concise, and helpful.\n\n" +
+                    contextBuilder.ToString())
+            };
+
+                    // Add conversation history if provided
+                    if (conversationHistory != null && conversationHistory.Any())
+                    {
+                        messages.AddRange(conversationHistory);
+                    }
+
+                    // Add current user message
+                    messages.Add(OpenAIChatMessage.FromUser(userMessage));
+
+                    // STEP 3: First call to GPT-4 with tool definitions
+                    var completionResult = await _openAIClient.ChatCompletion.CreateCompletion(
+                        new ChatCompletionCreateRequest
+                        {
+                            Messages = messages,
+                            Model = OpenAI.ObjectModels.Models.Gpt_4o_mini,
+                            MaxTokens = 1000,
+                            Temperature = 0.7f,
+                            Tools = ToolDefinitionService.GetAllTools()
+                        });
+
+                    if (!completionResult.Successful)
+                    {
+                        throw new Exception($"OpenAI API Error: {completionResult.Error?.Message}");
+                    }
+
+                    var choice = completionResult.Choices.First();
+
+                    // STEP 4: Check if AI wants to use a tool
+                    if (choice.Message.ToolCalls != null && choice.Message.ToolCalls.Any())
+                    {
+                        _logger.LogInformation("AI requested {Count} tool calls", choice.Message.ToolCalls.Count);
+
+                        // Add assistant's message with tool calls to conversation
+                        messages.Add(choice.Message);
+
+                        // STEP 5: Execute each tool call
+
+                        foreach (var toolCall in choice.Message.ToolCalls)
+                        {
+                            var functionName = toolCall.FunctionCall.Name;
+                            var argumentsJson = toolCall.FunctionCall.Arguments;
+
+                            _logger.LogInformation("Executing tool: {FunctionName} with args: {Args}",
+                                functionName, argumentsJson);
+
+                            // Execute the tool
+                            var result = await _toolExecutor.ExecuteToolAsync(userId, functionName, argumentsJson);
+
+                            _logger.LogInformation("Tool execution result: {Result}", result);
+
+                            // Add tool result to conversation
+                            messages.Add(new OpenAIChatMessage
+                            {
+                                Role = "tool",
+                                Content = result,
+                                ToolCallId = toolCall.Id
+                            });
+                        }
+
+                        // STEP 6: Second call to GPT-4 to generate final response with tool results
+                        var finalResult = await _openAIClient.ChatCompletion.CreateCompletion(
+                            new ChatCompletionCreateRequest
+                            {
+                                Messages = messages,
+                                Model = OpenAI.ObjectModels.Models.Gpt_4o_mini,
+                                MaxTokens = 1000,
+                                Temperature = 0.7f
+                            });
+
+                        if (finalResult.Successful)
+                        {
+                            return finalResult.Choices.First().Message.Content;
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Final response generation failed: {Error}", finalResult.Error?.Message);
+                            return "I completed the action, but had trouble generating a final response.";
+                        }
+                    }
+
+                    // STEP 7: No tool call needed, return regular response
+                    return choice.Message.Content;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error in RAG with tools, falling back to keyword search");
+                    // Fall back to existing method without tools
+                    return await GetResponseWithContextAsync(userId, userMessage, conversationHistory);
+                }
+            }
+            else
+            {
+                _logger.LogWarning("RAG not available for tool calling, using existing context method");
+                return await GetResponseWithContextAsync(userId, userMessage, conversationHistory);
+            }
         }
     }
 
