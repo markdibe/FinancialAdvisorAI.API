@@ -21,5 +21,6 @@ namespace FinancialAdvisorAI.API.Models
         public DateTime? LastLoginAt { get; set; }
 
         public DateTime? LastGmailSync { get; set; }
+        public DateTime? LastCalendarSync { get; set; }
     }
 }
