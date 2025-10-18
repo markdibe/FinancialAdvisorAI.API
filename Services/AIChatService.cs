@@ -171,7 +171,6 @@ namespace FinancialAdvisorAI.API.Services
             return context;
         }
 
-
         private async Task<List<Models.CalendarEventCache>> SearchCalendarEventsAsync(int userId, string query)
         {
             try
@@ -199,6 +198,10 @@ namespace FinancialAdvisorAI.API.Services
                             var tomorrow = today.AddDays(1);
                             eventsQuery = eventsQuery.Where(e => e.StartTime >= today && e.StartTime < tomorrow);
                             break;
+                        case "yesterday":
+                            var yesterday = today.AddDays(-1);
+                            eventsQuery = eventsQuery.Where(e => e.StartTime >= yesterday && e.StartTime < today);
+                            break;
                         case "tomorrow":
                             var dayAfterTomorrow = today.AddDays(2);
                             eventsQuery = eventsQuery.Where(e => e.StartTime >= today.AddDays(1) && e.StartTime < dayAfterTomorrow);
@@ -208,10 +211,21 @@ namespace FinancialAdvisorAI.API.Services
                             var weekEnd = weekStart.AddDays(7);
                             eventsQuery = eventsQuery.Where(e => e.StartTime >= weekStart && e.StartTime < weekEnd);
                             break;
+                        case "last_week":
+                            var lastWeekStart = today.AddDays(-(int)now.DayOfWeek - 7);
+                            var lastWeekEnd = lastWeekStart.AddDays(7);
+                            eventsQuery = eventsQuery.Where(e => e.StartTime >= lastWeekStart && e.StartTime < lastWeekEnd);
+                            break;
                         case "next_week":
                             var nextWeekStart = today.AddDays(7 - (int)now.DayOfWeek);
                             var nextWeekEnd = nextWeekStart.AddDays(7);
                             eventsQuery = eventsQuery.Where(e => e.StartTime >= nextWeekStart && e.StartTime < nextWeekEnd);
+                            break;
+                        case "past":
+                            eventsQuery = eventsQuery.Where(e => e.StartTime < now);
+                            break;
+                        case "all":
+                            // No time filter - show all events
                             break;
                         case "upcoming":
                         default:
@@ -276,14 +290,14 @@ namespace FinancialAdvisorAI.API.Services
                         "- IsAllDay (bool): Whether event is all-day\n\n" +
                         "INSTRUCTIONS:\n" +
                         "1. Determine if this is a calendar/meeting query\n" +
-                        "2. Extract time filters (today, this_week, upcoming, specific_date, etc.)\n" +
+                        "2. Extract time filters (today, this_week, upcoming, past, last_week, yesterday, specific_date, etc.)\n" +
                         "3. Identify which fields to search in and what terms to search for\n" +
                         "4. Specify ordering and limits\n\n" +
                         "Respond with ONLY valid JSON in this format:\n" +
                         "{\n" +
                         "  \"isCalendarQuery\": true/false,\n" +
                         "  \"filters\": {\n" +
-                        "    \"timeFilter\": \"upcoming\" | \"today\" | \"tomorrow\" | \"this_week\" | \"next_week\" | \"all\",\n" +
+                        "    \"timeFilter\": \"upcoming\" | \"today\" | \"tomorrow\" | \"yesterday\" | \"this_week\" | \"last_week\" | \"next_week\" | \"past\" | \"all\",\n" +
                         "    \"searchFields\": [\"Summary\", \"Description\", \"Location\", \"Attendees\"],\n" +
                         "    \"searchTerms\": [\"term1\", \"term2\"] or null,\n" +
                         "    \"specificDate\": \"YYYY-MM-DD\" or null,\n" +
@@ -301,6 +315,10 @@ namespace FinancialAdvisorAI.API.Services
                         "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"today\", \"searchFields\": null, \"searchTerms\": null}, \"orderBy\": \"StartTime\", \"orderDirection\": \"asc\", \"limit\": 20}\n\n" +
                         "Q: 'Show me meetings with John about budget'\n" +
                         "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"upcoming\", \"searchFields\": [\"Summary\", \"Description\", \"Attendees\"], \"searchTerms\": [\"john\", \"budget\"]}, \"orderBy\": \"StartTime\", \"orderDirection\": \"asc\", \"limit\": 10}\n\n" +
+                        "Q: 'Did I meet with Sara last week?'\n" +
+                        "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"last_week\", \"searchFields\": [\"Summary\", \"Attendees\"], \"searchTerms\": [\"sara\"]}, \"orderBy\": \"StartTime\", \"orderDirection\": \"desc\", \"limit\": 10}\n\n" +
+                        "Q: 'When was my last meeting with the client?'\n" +
+                        "A: {\"isCalendarQuery\": true, \"filters\": {\"timeFilter\": \"past\", \"searchFields\": [\"Summary\", \"Description\"], \"searchTerms\": [\"client\"]}, \"orderBy\": \"StartTime\", \"orderDirection\": \"desc\", \"limit\": 5}\n\n" +
                         "Q: 'What emails did I get?'\n" +
                         "A: {\"isCalendarQuery\": false}"),
                     OpenAIChatMessage.FromUser(query)
@@ -336,6 +354,7 @@ namespace FinancialAdvisorAI.API.Services
                 return new CalendarQueryParams { IsCalendarQuery = false };
             }
         }
+
 
         private string BuildCalendarContext(List<Models.CalendarEventCache> events)
         {

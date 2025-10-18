@@ -38,7 +38,7 @@ namespace FinancialAdvisorAI.API.Controllers
 
                 _logger.LogInformation("Starting Calendar sync for user {UserId}", userId);
 
-                var events = await _eventService.ListEventsAsync(user, 100);
+                var events = await _eventService.ListEventsAsync(user, 1000);
 
                 int newEvents = 0;
                 int updatedEvents = 0;

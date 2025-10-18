@@ -41,8 +41,8 @@ namespace FinancialAdvisorAI.API.Services
                 var service = await GetCalendarServiceAsync(user);
                 var request = service.Events.List("primary");
 
-                request.TimeMin = DateTime.UtcNow.AddMonths(-1);
-                request.TimeMax = DateTime.UtcNow.AddMonths(3);
+                request.TimeMinDateTimeOffset = DateTime.UtcNow.AddMonths(-6);
+                request.TimeMaxDateTimeOffset = DateTime.UtcNow.AddMonths(6);
                 request.MaxResults = maxResults;
                 request.SingleEvents = true;
                 request.OrderBy = EventsResource.ListRequest.OrderByEnum.StartTime;
