@@ -65,7 +65,7 @@ namespace FinancialAdvisorAI.API.Controllers
                     .ToList();
 
                 // Get AI response WITH email context
-                var aiResponse = await _aiChatService.GetResponseWithContextAsync(
+                var aiResponse = await _aiChatService.GetResponseWithToolsAsync(
                     request.UserId,
                     request.Message,
                     conversationHistory
