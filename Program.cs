@@ -23,6 +23,8 @@ builder.Services.AddScoped<GoogleAuthService>();
 builder.Services.AddScoped<AiChatService>();
 builder.Services.AddScoped<EmailService>();
 builder.Services.AddScoped<EventService>();
+builder.Services.AddScoped<HubSpotService>();
+
 
 // Configure CORS to allow Angular app
 
