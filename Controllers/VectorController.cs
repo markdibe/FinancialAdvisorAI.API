@@ -37,8 +37,7 @@ namespace FinancialAdvisorAI.API.Controllers
                 _logger.LogInformation("Starting vector sync for user {UserId}", userId);
 
                 // Run sync in background (for large datasets)
-                _ = Task.Run(async () =>
-                {
+                
                     try
                     {
                         await _vectorSyncService.SyncAllDataForUserAsync(userId);
@@ -47,7 +46,6 @@ namespace FinancialAdvisorAI.API.Controllers
                     {
                         _logger.LogError(ex, "Error during vector sync for user {UserId}", userId);
                     }
-                });
 
                 return Ok(new
                 {
