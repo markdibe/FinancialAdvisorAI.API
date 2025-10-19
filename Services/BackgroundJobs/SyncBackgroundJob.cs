@@ -224,76 +224,36 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
                     userId, incremental);
 
                 // Determine since date
-                DateTime? since = incremental ? user.LastGmailSync?.AddMinutes(-5) : null;
+                DateTime? since = incremental
+                    ? user.LastGmailSync?.AddMinutes(-5) // 5 min overlap for safety
+                    : null;
 
                 var progress = new Progress<SyncProgress>(p =>
                 {
                     _logger.LogInformation("Gmail sync progress: {Status}", p.Status);
                 });
 
-                var messages = await _emailService.ListAllMessagesAsync(
-                    user,
-                    query: null,
-                    since: since,
-                    progress: progress);
-
-                // Limit first sync if needed
-                if (!since.HasValue && incremental)
-                {
-                    messages = messages.Take(100).ToList();
-                }
-
-                int newEmails = 0;
-                int updatedEmails = 0;
-
-                foreach (var message in messages)
-                {
-                    var messageId = message.Id;
-                    var existingEmail = await _context.EmailCaches
-                        .FirstOrDefaultAsync(e => e.UserId == userId && e.MessageId == messageId);
-
-                    var emailCache = existingEmail ?? new EmailCache { UserId = userId };
-
-                    emailCache.MessageId = messageId;
-                    emailCache.ThreadId = message.ThreadId;
-                    emailCache.Subject = _emailService.GetMessageSubject(message);
-                    emailCache.FromEmail = _emailService.GetMessageFrom(message);
-                    emailCache.Body = _emailService.GetMessageBody(message);
-                    emailCache.Snippet = message.Snippet;
-                    emailCache.EmailDate = _emailService.GetMessageDate(message);
-                    emailCache.IsRead = !message.LabelIds?.Contains("UNREAD") ?? true;
-                    emailCache.IsSent = message.LabelIds?.Contains("SENT") ?? false;
-                    emailCache.UpdatedAt = DateTime.UtcNow;
-
-                    if (existingEmail == null)
-                    {
-                        _context.EmailCaches.Add(emailCache);
-                        newEmails++;
-                    }
-                    else
-                    {
-                        updatedEmails++;
-                    }
-
-                    if ((newEmails + updatedEmails) % 100 == 0)
-                    {
-                        await _context.SaveChangesAsync();
-                    }
-                }
+                // ✅ Use new incremental sync method
+                var (newEmails, updatedEmails, totalProcessed) =
+                    await _emailService.SyncAllMessagesIncrementallyAsync(
+                        user,
+                        query: null,
+                        since: since,
+                        progress: progress);
 
                 user.LastGmailSync = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
 
                 // Update sync log
                 syncLog.Status = "Success";
-                syncLog.ItemsProcessed = messages.Count;
+                syncLog.ItemsProcessed = totalProcessed;
                 syncLog.ItemsAdded = newEmails;
                 syncLog.ItemsUpdated = updatedEmails;
                 syncLog.CompletedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
 
-                _logger.LogInformation("Gmail sync completed: {New} new, {Updated} updated",
-                    newEmails, updatedEmails);
+                _logger.LogInformation("Gmail sync completed: {New} new, {Updated} updated, {Total} total",
+                    newEmails, updatedEmails, totalProcessed);
             }
             catch (Exception ex)
             {

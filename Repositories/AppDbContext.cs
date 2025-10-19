@@ -20,6 +20,7 @@ namespace FinancialAdvisorAI.API.Repositories
         public DbSet<HubSpotContact> HubSpotContacts { get; set; }
         public DbSet<HubSpotCompany> HubSpotCompanies { get; set; }
         public DbSet<HubSpotDeal> HubSpotDeals { get; set; }
+        public DbSet<AgentActivity> AgentActivities { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -44,16 +45,6 @@ namespace FinancialAdvisorAI.API.Repositories
                       .OnDelete(DeleteBehavior.Cascade);
             });
 
-            // Configure OngoingInstruction entity
-            modelBuilder.Entity<OngoingInstruction>(entity =>
-            {
-                entity.HasKey(e => e.Id);
-                entity.Property(e => e.Instruction).IsRequired();
-                entity.HasOne(e => e.User)
-                      .WithMany()
-                      .HasForeignKey(e => e.UserId)
-                      .OnDelete(DeleteBehavior.Cascade);
-            });
 
             // Configure AgentTask entity
             modelBuilder.Entity<AgentTask>(entity =>
