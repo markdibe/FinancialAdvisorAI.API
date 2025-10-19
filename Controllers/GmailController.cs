@@ -25,11 +25,12 @@ namespace FinancialAdvisorAI.API.Controllers
             _logger = logger;
         }
 
+        /// <summary>
+        /// Quick sync - Fetch only the latest 300 emails for immediate user feedback
+        /// Full sync is handled by background jobs
+        /// </summary>
         [HttpPost("sync/{userId}")]
-        public async Task<IActionResult> SyncEmails(
-     int userId,
-     [FromQuery] bool fullSync = false,
-     [FromQuery] int? maxResults = null)
+        public async Task<IActionResult> SyncEmails(int userId)
         {
             try
             {
@@ -39,60 +40,21 @@ namespace FinancialAdvisorAI.API.Controllers
                     return NotFound(new { error = "User not found" });
                 }
 
-                _logger.LogInformation("Starting Gmail sync for user {UserId} (FullSync: {FullSync})",
-                    userId, fullSync);
+                _logger.LogInformation("Starting QUICK Gmail sync for user {UserId} (latest 300 emails)", userId);
 
-                List<Google.Apis.Gmail.v1.Data.Message> messages;
-
-                if (fullSync)
+                var progress = new Progress<SyncProgress>(p =>
                 {
-                    // Full sync - get ALL emails
-                    _logger.LogInformation("Performing FULL Gmail sync (all emails)");
+                    _logger.LogInformation("Sync progress: {Status}", p.Status);
+                });
 
-                    var progress = new Progress<SyncProgress>(p =>
-                    {
-                        _logger.LogInformation("Sync progress: {Status}", p.Status);
-                    });
+                // ✅ CHANGE: Only fetch latest 300 emails for quick sync
+                // Background jobs will handle full sync
+                var messages = await _emailService.ListRecentMessagesAsync(
+                    user,
+                    maxResults: 300,
+                    progress: progress);
 
-                    messages = await _emailService.ListAllMessagesAsync(
-                        user,
-                        query: null,
-                        since: null,
-                        progress: progress);
-                }
-                else
-                {
-                    // Incremental sync - only new emails since last sync
-                    DateTime? since = user.LastGmailSync?.AddMinutes(-5); // 5 min overlap for safety
-
-                    if (since.HasValue)
-                    {
-                        _logger.LogInformation("Performing INCREMENTAL sync since {Since}", since);
-                    }
-                    else
-                    {
-                        _logger.LogInformation("First sync - fetching last {Max} emails", maxResults ?? 100);
-                    }
-
-                    var progress = new Progress<SyncProgress>(p =>
-                    {
-                        _logger.LogInformation("Sync progress: {Status}", p.Status);
-                    });
-
-                    messages = await _emailService.ListAllMessagesAsync(
-                        user,
-                        query: null,
-                        since: since,
-                        progress: progress);
-
-                    // If no last sync and no maxResults specified, limit to 100 for safety
-                    if (!since.HasValue && !maxResults.HasValue)
-                    {
-                        messages = messages.Take(100).ToList();
-                    }
-                }
-
-                _logger.LogInformation("Processing {Count} emails", messages.Count);
+                _logger.LogInformation("Processing {Count} emails for quick sync", messages.Count);
 
                 int newEmails = 0;
                 int updatedEmails = 0;
@@ -129,7 +91,7 @@ namespace FinancialAdvisorAI.API.Controllers
                     }
 
                     // Save in batches to avoid memory issues
-                    if ((newEmails + updatedEmails) % 100 == 0)
+                    if ((newEmails + updatedEmails) % 50 == 0)
                     {
                         await _context.SaveChangesAsync();
                         _logger.LogInformation("Saved batch: {New} new, {Updated} updated",
@@ -141,17 +103,18 @@ namespace FinancialAdvisorAI.API.Controllers
                 await _context.SaveChangesAsync();
 
                 _logger.LogInformation(
-                    "Gmail sync completed for user {UserId}. New: {New}, Updated: {Updated}, Total: {Total}",
+                    "Quick Gmail sync completed for user {UserId}. New: {New}, Updated: {Updated}, Total: {Total}",
                     userId, newEmails, updatedEmails, messages.Count);
 
                 return Ok(new
                 {
                     success = true,
-                    message = "Gmail sync completed",
+                    message = "Quick sync completed (latest 300 emails). Full sync runs in background.",
                     newEmails,
                     updatedEmails,
                     totalProcessed = messages.Count,
-                    lastSync = user.LastGmailSync
+                    lastSync = user.LastGmailSync,
+                    isQuickSync = true
                 });
             }
             catch (Exception ex)
