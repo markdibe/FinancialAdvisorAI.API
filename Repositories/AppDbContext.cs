@@ -16,7 +16,7 @@ namespace FinancialAdvisorAI.API.Repositories
         public DbSet<AgentTask> AgentTasks { get; set; }
         public DbSet<EmailCache> EmailCaches { get; set; }
         public DbSet<CalendarEventCache> CalendarEventCaches { get; set; }
-
+        public DbSet<SyncLog> SyncLogs { get; set; }
         public DbSet<HubSpotContact> HubSpotContacts { get; set; }
         public DbSet<HubSpotCompany> HubSpotCompanies { get; set; }
         public DbSet<HubSpotDeal> HubSpotDeals { get; set; }
@@ -120,6 +120,17 @@ namespace FinancialAdvisorAI.API.Repositories
                 entity.HasKey(e => e.Id);
                 entity.Property(e => e.HubSpotId).IsRequired();
                 entity.HasIndex(e => new { e.UserId, e.HubSpotId }).IsUnique();
+                entity.HasOne(e => e.User)
+                      .WithMany()
+                      .HasForeignKey(e => e.UserId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<SyncLog>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.SyncType).IsRequired();
+                entity.Property(e => e.Status).IsRequired();
                 entity.HasOne(e => e.User)
                       .WithMany()
                       .HasForeignKey(e => e.UserId)
