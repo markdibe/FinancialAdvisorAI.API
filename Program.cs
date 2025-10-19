@@ -20,7 +20,9 @@ builder.Services.AddSwaggerGen();
 
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection"));
+});
 
 //register services 
 builder.Services.AddScoped<GoogleAuthService>();
@@ -33,6 +35,7 @@ builder.Services.AddSingleton<QdrantService>();
 builder.Services.AddScoped<VectorSyncService>();
 builder.Services.AddScoped<ToolExecutorService>();
 builder.Services.AddScoped<SyncBackgroundJob>();
+
 
 builder.Services.AddHangfire(configuration => configuration
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
@@ -94,6 +97,8 @@ app.UseSwaggerUI();
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    dbContext.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+    dbContext.Database.ExecuteSqlRaw("PRAGMA busy_timeout=30000;");
     dbContext.Database.Migrate();
 }
 
@@ -102,11 +107,10 @@ using (var scope = app.Services.CreateScope())
 {
     var recurringJobManager = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
 
-    // Incremental sync every 15 minutes
     recurringJobManager.AddOrUpdate<SyncBackgroundJob>(
         "incremental-sync-all-users",
         job => job.IncrementalSyncAllUsersAsync(),
-        "*/15 * * * *", // Every 15 minutes
+        "0 0/3 * * *", // Every 3 hours
         new RecurringJobOptions
         {
             TimeZone = TimeZoneInfo.Utc
