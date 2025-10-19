@@ -97,6 +97,9 @@ namespace FinancialAdvisorAI.API.Controllers
                 await _hubspotService.SyncCompaniesAsync(user);
                 await _hubspotService.SyncDealsAsync(user);
 
+                var jobId = BackgroundJob.Enqueue<VectorSyncService>(job => job.SyncHubSpotContactsAsync(user.Id));
+                var jobId2 = BackgroundJob.Enqueue<VectorSyncService>(job => job.SyncHubSpotCompaniesAsync(user.Id));
+                var jobId3 = BackgroundJob.Enqueue<VectorSyncService>(job => job.SyncHubSpotDealsAsync(user.Id));
                 return Ok(new
                 {
                     success = true,

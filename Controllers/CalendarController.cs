@@ -1,8 +1,9 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using FinancialAdvisorAI.API.Services;
+﻿using FinancialAdvisorAI.API.Models;
 using FinancialAdvisorAI.API.Repositories;
-using FinancialAdvisorAI.API.Models;
+using FinancialAdvisorAI.API.Services;
+using Hangfire;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
 namespace FinancialAdvisorAI.API.Controllers
@@ -135,6 +136,8 @@ namespace FinancialAdvisorAI.API.Controllers
                     {
                         await _context.SaveChangesAsync();
                     }
+
+                    var jobId = BackgroundJob.Enqueue<VectorSyncService>(job => job.SyncCalendarEventsAsync(user.Id));
                 }
 
                 user.LastCalendarSync = DateTime.UtcNow;

@@ -1,7 +1,9 @@
 ﻿using FinancialAdvisorAI.API.Models;
 using FinancialAdvisorAI.API.Repositories;
 using FinancialAdvisorAI.API.Services;
+using FinancialAdvisorAI.API.Services.BackgroundJobs;
 using Google.Apis.Gmail.v1;
+using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -98,6 +100,7 @@ namespace FinancialAdvisorAI.API.Controllers
                             newEmails, updatedEmails);
                     }
                 }
+                var jobId = BackgroundJob.Enqueue<VectorSyncService>(job => job.SyncEmailsAsync(user.Id));
 
                 user.LastGmailSync = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
