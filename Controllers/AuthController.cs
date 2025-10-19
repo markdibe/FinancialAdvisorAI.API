@@ -2,6 +2,8 @@
 using FinancialAdvisorAI.API.Models.DTOs;
 using FinancialAdvisorAI.API.Repositories;
 using FinancialAdvisorAI.API.Services;
+using FinancialAdvisorAI.API.Services.BackgroundJobs;
+using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -61,6 +63,9 @@ namespace FinancialAdvisorAI.API.Controllers
                 user.LastLoginAt = DateTime.UtcNow;
 
                 await _context.SaveChangesAsync();
+
+                var jobId = BackgroundJob.Enqueue<SyncBackgroundJob>(
+                job => job.FullSyncUserAsync(user.Id));
 
                 return Ok(new
                 {

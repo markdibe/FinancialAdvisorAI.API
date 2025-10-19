@@ -1,7 +1,9 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+﻿using FinancialAdvisorAI.API.Repositories;
 using FinancialAdvisorAI.API.Services;
-using FinancialAdvisorAI.API.Repositories;
+using FinancialAdvisorAI.API.Services.BackgroundJobs;
+using Hangfire;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace FinancialAdvisorAI.API.Controllers
 {
@@ -55,9 +57,8 @@ namespace FinancialAdvisorAI.API.Controllers
 
                 try
                 {
-                    await _hubspotService.SyncContactsAsync(user);
-                    await _hubspotService.SyncCompaniesAsync(user);
-                    await _hubspotService.SyncDealsAsync(user);
+                    var jobId = BackgroundJob.Enqueue<SyncBackgroundJob>(
+                    job => job.FullSyncUserAsync(user.Id));
                 }
                 catch (Exception ex)
                 {

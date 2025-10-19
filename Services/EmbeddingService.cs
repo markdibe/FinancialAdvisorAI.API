@@ -29,7 +29,7 @@ namespace FinancialAdvisorAI.API.Services
             try
             {
                 // Truncate text if too long (max 8192 tokens for text-embedding-3-small)
-                if (text.Length > 30000)
+                if (text.Length > 25000)
                 {
                     text = text.Substring(0, 30000);
                 }

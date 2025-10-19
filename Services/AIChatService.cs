@@ -127,7 +127,7 @@ namespace FinancialAdvisorAI.API.Services
                 filter: new Dictionary<string, object> { { "user_id", userId } }
             );
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 throw;
             }
@@ -498,12 +498,30 @@ namespace FinancialAdvisorAI.API.Services
                     // Generate embedding for the user's query
                     var queryEmbedding = await _embeddingService!.GenerateEmbeddingAsync(userMessage);
 
+                    int searchLimit = DetermineSearchLimit(userMessage);
+
+
                     // Search Qdrant for relevant context
                     var searchResults = await _qdrantService!.SearchAsync(
                         queryVector: queryEmbedding,
-                        limit: 10,
+                        limit: searchLimit * 2,
                         filter: new Dictionary<string, object> { { "user_id", userId } }
                     );
+
+                    //var relevantResults = searchResults
+                    //    .Where(r => r.Score >= 0.5)
+                    //    .ToList();
+
+                    //var finalResults = DiversifyResults(relevantResults, searchLimit);
+
+                    _logger.LogInformation(
+                        "Search: fetched {Fetched}, filtered to {Filtered} (score>={MinScore}), final {Final}",
+                        searchResults.Count,
+                        searchResults.Count,
+                        0.5,
+                        searchResults.Count
+                    );
+
 
                     // Build context from search results
                     var contextBuilder = new StringBuilder();
@@ -631,7 +649,79 @@ namespace FinancialAdvisorAI.API.Services
                 return await GetResponseWithContextAsync(userId, userMessage, conversationHistory);
             }
         }
+
+
+        private int DetermineSearchLimit(string query)
+        {
+            var lowerQuery = query.ToLower();
+
+            // Keywords indicating comprehensive search
+            if (lowerQuery.Contains("all") ||
+                lowerQuery.Contains("everything") ||
+                lowerQuery.Contains("complete") ||
+                lowerQuery.Contains("summarize") ||
+                lowerQuery.Contains("list"))
+                return 50;
+
+            // Long queries = more context needed
+            if (query.Length > 150) return 30;
+            if (query.Length > 100) return 20;
+
+            return 15; // Default
+        }
+
+        // Helper: Determine minimum score
+        private float DetermineMinScore(string query)
+        {
+            var lowerQuery = query.ToLower();
+
+            // Specific questions need high precision
+            if (lowerQuery.StartsWith("who") ||
+                lowerQuery.StartsWith("what") ||
+                lowerQuery.StartsWith("when"))
+                return 0.75f; // Higher threshold for factual questions
+
+            // Broad questions can accept lower scores
+            if (lowerQuery.Contains("everything") ||
+                lowerQuery.Contains("summarize"))
+                return 0.65f;
+
+            return 0.70f; // Default
+        }
+
+        // Helper: Diversify results
+        private List<ScoredPoint> DiversifyResults(List<ScoredPoint> results, int maxResults)
+        {
+            if (results.Count <= maxResults)
+                return results;
+
+            var diversified = new List<ScoredPoint>();
+
+            // Take top N from each type
+            var emails = results.Where(r => r.Payload["type"].StringValue == "email").Take(maxResults / 2);
+            var calendar = results.Where(r => r.Payload["type"].StringValue == "calendar_event").Take(maxResults / 4);
+            var hubspot = results.Where(r => r.Payload["type"].StringValue.StartsWith("hubspot_")).Take(maxResults / 4);
+
+            diversified.AddRange(emails);
+            diversified.AddRange(calendar);
+            diversified.AddRange(hubspot);
+
+            // Fill remaining slots with highest scores regardless of type
+            var remaining = maxResults - diversified.Count;
+            if (remaining > 0)
+            {
+                var others = results
+                    .Except(diversified)
+                    .OrderByDescending(r => r.Score)
+                    .Take(remaining);
+                diversified.AddRange(others);
+            }
+
+            return diversified.OrderByDescending(r => r.Score).ToList();
+        }
     }
+
+
 
     public class CalendarQueryParams
     {
