@@ -1,8 +1,10 @@
-﻿using Google.Apis.Calendar.v3;
+﻿using FinancialAdvisorAI.API.Models;
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Auth.OAuth2.Flows;
+using Google.Apis.Auth.OAuth2.Responses;
+using Google.Apis.Calendar.v3;
 using Google.Apis.Calendar.v3.Data;
 using Google.Apis.Services;
-using FinancialAdvisorAI.API.Models;
-
 // Alias to avoid confusion
 using GoogleCalendarService = Google.Apis.Calendar.v3.CalendarService;
 
@@ -83,5 +85,95 @@ namespace FinancialAdvisorAI.API.Services
 
             return null;
         }
+
+        /// <summary>
+        /// Create a new calendar event
+        /// </summary>
+        public async Task<Google.Apis.Calendar.v3.Data.Event> CreateEventAsync(
+            User user,
+            string summary,
+            string description,
+            DateTime startTime,
+            DateTime endTime,
+            string? attendeeEmail = null)
+        {
+            try
+            {
+                var service = await GetCalendarServiceAsync(user);
+
+                var newEvent = new Google.Apis.Calendar.v3.Data.Event
+                {
+                    Summary = summary,
+                    Description = description,
+                    Start = new Google.Apis.Calendar.v3.Data.EventDateTime
+                    {
+                        DateTime = startTime,
+                        TimeZone = "UTC"
+                    },
+                    End = new Google.Apis.Calendar.v3.Data.EventDateTime
+                    {
+                        DateTime = endTime,
+                        TimeZone = "UTC"
+                    }
+                };
+
+                // Add attendee if provided
+                if (!string.IsNullOrEmpty(attendeeEmail))
+                {
+                    newEvent.Attendees = new List<Google.Apis.Calendar.v3.Data.EventAttendee>
+            {
+                new Google.Apis.Calendar.v3.Data.EventAttendee
+                {
+                    Email = attendeeEmail
+                }
+            };
+                }
+
+                var request = service.Events.Insert(newEvent, "primary");
+                var createdEvent = await request.ExecuteAsync();
+
+                _logger.LogInformation("Created calendar event: {EventId} - {Summary}", createdEvent.Id, summary);
+
+                return createdEvent;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating calendar event for user {UserId}", user.Id);
+                throw;
+            }
+        }
+
+        ///// <summary>
+        ///// Get calendar service for user
+        ///// </summary>
+        //private async Task<Google.Apis.Calendar.v3.CalendarService> GetCalendarServiceAsync(User user)
+        //{
+        //    var credential = new UserCredential(
+        //        new GoogleAuthorizationCodeFlow(
+        //            new GoogleAuthorizationCodeFlow.Initializer
+        //            {
+        //                ClientSecrets = new ClientSecrets
+        //                {
+        //                    ClientId = _configuration["Google:ClientId"],
+        //                    ClientSecret = _configuration["Google:ClientSecret"]
+        //                },
+        //                Scopes = new[] {
+        //            Google.Apis.Calendar.v3.CalendarService.Scope.Calendar,
+        //            Google.Apis.Calendar.v3.CalendarService.Scope.CalendarEvents
+        //                }
+        //            }),
+        //        user.Email,
+        //        new TokenResponse
+        //        {
+        //            AccessToken = user.GoogleAccessToken,
+        //            RefreshToken = user.GoogleRefreshToken
+        //        });
+
+        //    return new Google.Apis.Calendar.v3.CalendarService(new BaseClientService.Initializer
+        //    {
+        //        HttpClientInitializer = credential,
+        //        ApplicationName = "Financial Advisor AI"
+        //    });
+        //}
     }
 }

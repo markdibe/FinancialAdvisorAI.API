@@ -29,21 +29,22 @@ namespace FinancialAdvisorAI.API.Services
             try
             {
                 // Truncate text if too long (max 8192 tokens for text-embedding-3-small)
-                if (text.Length > 25000)
+                if (text.Length > 15000)
                 {
-                    text = text.Substring(0, 30000);
+                    text = text.Substring(0, 15000);
                 }
 
                 var embeddingResult = await _openAIClient.Embeddings.CreateEmbedding(
                     new EmbeddingCreateRequest
                     {
                         Input = text,
-                        Model = OpenAI.ObjectModels.Models.TextEmbeddingV3Small
+                        Model = OpenAI.ObjectModels.Models.TextEmbeddingV3Large
                     });
 
                 if (embeddingResult.Successful)
                 {
                     var embedding = embeddingResult.Data.First().Embedding;
+                    Task.Delay(100).Wait();
                     return embedding.Select(x => (float)x).ToArray();
                 }
                 else

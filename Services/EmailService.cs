@@ -5,6 +5,7 @@ using Google.Apis.Gmail.v1.Data;
 using Google.Apis.Requests;
 using Google.Apis.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace FinancialAdvisorAI.API.Services
 {
@@ -13,15 +14,18 @@ namespace FinancialAdvisorAI.API.Services
         private readonly GoogleAuthService _googleAuthService;
         private readonly AppDbContext _context;
         private readonly ILogger<EmailService> _logger;
+        private readonly IConfiguration _configuration;
 
         public EmailService(
             GoogleAuthService googleAuthService,
             AppDbContext context,
-            ILogger<EmailService> logger)
+            ILogger<EmailService> logger,
+            IConfiguration configuration)
         {
             _googleAuthService = googleAuthService;
             _context = context;
             _logger = logger;
+            _configuration = configuration;
         }
 
         public async Task<GmailService> GetGmailServiceAsync(User user)
@@ -469,13 +473,13 @@ namespace FinancialAdvisorAI.API.Services
             int userId,
             Message message)
         {
-            using var scope = _context.Database.BeginTransaction();
+            var context = CreateDbContextScope();
             try
             {
                 var messageId = message.Id;
 
                 // Check if email already exists
-                var existingEmail = await _context.EmailCaches
+                var existingEmail = await context.EmailCaches
                     .FirstOrDefaultAsync(e => e.UserId == userId && e.MessageId == messageId);
 
                 bool isNew = false;
@@ -500,37 +504,36 @@ namespace FinancialAdvisorAI.API.Services
                         UpdatedAt = DateTime.UtcNow
                     };
 
-                    _context.EmailCaches.Add(emailCache);
+                    context.EmailCaches.Add(emailCache);
                     isNew = true;
                 }
-                else
-                {
-                    // Update existing email (in case labels changed, etc.)
-                    existingEmail.Subject = GetMessageSubject(message);
-                    existingEmail.FromEmail = GetMessageFrom(message);
-                    existingEmail.Body = GetMessageBody(message);
-                    existingEmail.Snippet = message.Snippet;
-                    existingEmail.EmailDate = GetMessageDate(message);
-                    existingEmail.IsRead = !message.LabelIds?.Contains("UNREAD") ?? true;
-                    existingEmail.IsSent = message.LabelIds?.Contains("SENT") ?? false;
-                    existingEmail.UpdatedAt = DateTime.UtcNow;
 
-                    isUpdated = true;
-                }
-
-                await _context.SaveChangesAsync();
-                await scope.CommitAsync();
+                await context.SaveChangesAsync();
 
                 return (isNew, isUpdated);
             }
             catch (Exception ex)
             {
-                await scope.RollbackAsync();
                 _logger.LogError(ex, "Error saving message {MessageId} to database", message.Id);
                 throw;
             }
+            finally
+            {
+                context.Dispose();
+            }
         }
-       
+
+        private AppDbContext CreateDbContextScope()
+        {
+            var optionsBuilder = new DbContextOptionsBuilder<AppDbContext>();
+            var connectionString = _configuration.GetConnectionString("DefaultConnection");
+
+            optionsBuilder.UseSqlite(connectionString);
+
+            return new AppDbContext(optionsBuilder.Options);
+
+        }
+
         private string DecodeBase64(string encodedString)
         {
             try
