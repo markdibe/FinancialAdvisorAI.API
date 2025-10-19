@@ -3,6 +3,7 @@ using FinancialAdvisorAI.API.Services;
 using FinancialAdvisorAI.API.Services.BackgroundJobs;
 using FinancialAdvisorAI.API.Services.BackgroundJobs.FinancialAdvisorAI.API.Services.BackgroundJobs;
 using Hangfire;
+using Hangfire.Storage.SQLite;
 using Microsoft.EntityFrameworkCore;
 using System;
 
@@ -37,7 +38,7 @@ builder.Services.AddHangfire(configuration => configuration
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
-    .UseSqlServerStorage(builder.Configuration.GetConnectionString("HangfireConnection")));
+    .UseSQLiteStorage(builder.Configuration.GetConnectionString("HangfireConnection")));
 
 
 builder.Services.AddHangfireServer();
@@ -93,7 +94,7 @@ app.UseSwaggerUI();
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    dbContext.Database.EnsureCreated();
+    dbContext.Database.Migrate();
 }
 
 
