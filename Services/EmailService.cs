@@ -36,6 +36,112 @@ namespace FinancialAdvisorAI.API.Services
             return service;
         }
 
+        /// <summary>
+        /// List messages with full pagination support
+        /// </summary>
+        public async Task<List<Message>> ListAllMessagesAsync(
+            User user,
+            string? query = null,
+            DateTime? since = null,
+            IProgress<SyncProgress>? progress = null)
+        {
+            try
+            {
+                var service = await GetGmailServiceAsync(user);
+                var allMessages = new List<Message>();
+                string? pageToken = null;
+                var pageCount = 0;
+
+                _logger.LogInformation("Starting full Gmail sync for user {UserId}", user.Id);
+
+                // Build query
+                var searchQuery = query;
+                if (since.HasValue)
+                {
+                    var sinceStr = since.Value.ToString("yyyy/MM/dd");
+                    searchQuery = string.IsNullOrEmpty(searchQuery)
+                        ? $"after:{sinceStr}"
+                        : $"{searchQuery} after:{sinceStr}";
+                }
+
+                do
+                {
+                    pageCount++;
+
+                    // List message IDs (this is fast)
+                    var request = service.Users.Messages.List("me");
+                    request.MaxResults = 500; // Max allowed by Gmail API
+                    request.PageToken = pageToken;
+
+                    if (!string.IsNullOrEmpty(searchQuery))
+                    {
+                        request.Q = searchQuery;
+                    }
+
+                    var response = await request.ExecuteAsync();
+
+                    if (response.Messages != null && response.Messages.Any())
+                    {
+                        _logger.LogInformation(
+                            "Page {Page}: Found {Count} messages",
+                            pageCount,
+                            response.Messages.Count);
+
+                        // Fetch full message details in batches
+                        var batchSize = 100;
+                        for (int i = 0; i < response.Messages.Count; i += batchSize)
+                        {
+                            var batch = response.Messages.Skip(i).Take(batchSize).ToList();
+
+                            // Fetch messages in parallel for speed
+                            var messageTasks = batch.Select(async messageInfo =>
+                            {
+                                try
+                                {
+                                    var msgRequest = service.Users.Messages.Get("me", messageInfo.Id);
+                                    return await msgRequest.ExecuteAsync();
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "Error fetching message {MessageId}", messageInfo.Id);
+                                    return null;
+                                }
+                            });
+
+                            var messages = await Task.WhenAll(messageTasks);
+                            allMessages.AddRange(messages.Where(m => m != null)!);
+
+                            // Report progress
+                            progress?.Report(new SyncProgress
+                            {
+                                TotalProcessed = allMessages.Count,
+                                CurrentPage = pageCount,
+                                Status = $"Fetched {allMessages.Count} emails..."
+                            });
+
+                            // Small delay to respect rate limits
+                            await Task.Delay(100);
+                        }
+                    }
+
+                    pageToken = response.NextPageToken;
+
+                } while (!string.IsNullOrEmpty(pageToken));
+
+                _logger.LogInformation(
+                    "Completed Gmail sync: {Count} messages across {Pages} pages",
+                    allMessages.Count,
+                    pageCount);
+
+                return allMessages;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error listing all Gmail messages for user {UserId}", user.Id);
+                throw;
+            }
+        }
+
         public async Task<List<Message>> ListMessagesAsync(User user, int maxResults = 100, string? query = null)
         {
             try
