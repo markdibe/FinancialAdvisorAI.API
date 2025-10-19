@@ -26,7 +26,9 @@ namespace FinancialAdvisorAI.API.Controllers
         }
 
         [HttpPost("sync/{userId}")]
-        public async Task<IActionResult> SyncCalendar(int userId)
+        public async Task<IActionResult> SyncCalendar(
+     int userId,
+     [FromQuery] bool fullSync = false)
         {
             try
             {
@@ -38,12 +40,62 @@ namespace FinancialAdvisorAI.API.Controllers
 
                 _logger.LogInformation("Starting Calendar sync for user {UserId}", userId);
 
-                var events = await _eventService.ListEventsAsync(user, 100);
+                // Determine date range
+                DateTime minTime;
+                DateTime maxTime;
+
+                if (fullSync)
+                {
+                    // Full sync: past year to 2 years future
+                    minTime = DateTime.UtcNow.AddYears(-1);
+                    maxTime = DateTime.UtcNow.AddYears(2);
+                    _logger.LogInformation("Full sync: {Min} to {Max}", minTime, maxTime);
+                }
+                else
+                {
+                    // Incremental: last sync to 1 year future
+                    minTime = user.LastCalendarSync?.AddDays(-1) ?? DateTime.UtcNow.AddMonths(-6);
+                    maxTime = DateTime.UtcNow.AddYears(1);
+                    _logger.LogInformation("Incremental sync: {Min} to {Max}", minTime, maxTime);
+                }
+
+                var allEvents = new List<Google.Apis.Calendar.v3.Data.Event>();
+                var service = await _eventService.GetCalendarServiceAsync(user);
+                string? pageToken = null;
+                var pageCount = 0;
+
+                // Paginate through all events
+                do
+                {
+                    pageCount++;
+                    var request = service.Events.List("primary");
+                    request.TimeMinDateTimeOffset = minTime;
+                    request.TimeMaxDateTimeOffset = maxTime;
+                    request.MaxResults = 250; // Max allowed
+                    request.SingleEvents = true;
+                    request.OrderBy = Google.Apis.Calendar.v3.EventsResource.ListRequest.OrderByEnum.StartTime;
+                    request.PageToken = pageToken;
+
+                    var events = await request.ExecuteAsync();
+
+                    if (events.Items != null && events.Items.Any())
+                    {
+                        allEvents.AddRange(events.Items);
+                        _logger.LogInformation("Page {Page}: Found {Count} events",
+                            pageCount, events.Items.Count);
+                    }
+
+                    pageToken = events.NextPageToken;
+
+                } while (!string.IsNullOrEmpty(pageToken));
+
+                _logger.LogInformation("Fetched {Count} events across {Pages} pages",
+                    allEvents.Count, pageCount);
 
                 int newEvents = 0;
                 int updatedEvents = 0;
 
-                foreach (var evt in events)
+                foreach (var evt in allEvents)
                 {
                     var eventId = evt.Id;
 
@@ -60,11 +112,10 @@ namespace FinancialAdvisorAI.API.Controllers
                     eventCache.EndTime = _eventService.GetEventEndTime(evt);
                     eventCache.IsAllDay = evt.Start?.Date != null;
 
-                    // Store attendees as JSON
                     if (evt.Attendees != null && evt.Attendees.Any())
                     {
                         var attendeeEmails = evt.Attendees.Select(a => a.Email).ToList();
-                        eventCache.Attendees = JsonSerializer.Serialize(attendeeEmails);
+                        eventCache.Attendees = System.Text.Json.JsonSerializer.Serialize(attendeeEmails);
                     }
 
                     eventCache.UpdatedAt = DateTime.UtcNow;
@@ -78,13 +129,19 @@ namespace FinancialAdvisorAI.API.Controllers
                     {
                         updatedEvents++;
                     }
+
+                    // Save in batches
+                    if ((newEvents + updatedEvents) % 50 == 0)
+                    {
+                        await _context.SaveChangesAsync();
+                    }
                 }
 
                 user.LastCalendarSync = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
 
-                _logger.LogInformation("Calendar sync completed for user {UserId}. New: {New}, Updated: {Updated}",
-                    userId, newEvents, updatedEvents);
+                _logger.LogInformation("Calendar sync completed. New: {New}, Updated: {Updated}",
+                    newEvents, updatedEvents);
 
                 return Ok(new
                 {
@@ -92,7 +149,7 @@ namespace FinancialAdvisorAI.API.Controllers
                     message = "Calendar sync completed",
                     newEvents,
                     updatedEvents,
-                    totalProcessed = events.Count,
+                    totalProcessed = allEvents.Count,
                     lastSync = user.LastCalendarSync
                 });
             }
