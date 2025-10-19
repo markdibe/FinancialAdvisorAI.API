@@ -64,7 +64,7 @@ namespace FinancialAdvisorAI.API.Services
             await _context.SaveChangesAsync();
         }
 
-        private async Task<string> GetValidAccessTokenAsync(User user)
+        public async Task<string> GetValidAccessTokenAsync(User user)
         {
             if (string.IsNullOrEmpty(user.HubspotAccessToken))
             {
