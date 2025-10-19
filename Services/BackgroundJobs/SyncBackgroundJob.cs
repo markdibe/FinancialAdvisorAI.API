@@ -13,6 +13,7 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
         private readonly HubSpotService _hubspotService;
         private readonly VectorSyncService _vectorSyncService;
         private readonly ILogger<SyncBackgroundJob> _logger;
+        private readonly IConfiguration _configuration;
 
         public SyncBackgroundJob(
             AppDbContext context,
@@ -20,6 +21,7 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
             EventService eventService,
             HubSpotService hubspotService,
             VectorSyncService vectorSyncService,
+            IConfiguration configuration,
             ILogger<SyncBackgroundJob> logger)
         {
             _context = context;
@@ -28,6 +30,7 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
             _hubspotService = hubspotService;
             _vectorSyncService = vectorSyncService;
             _logger = logger;
+            _configuration = configuration;
         }
 
         /// <summary>
@@ -205,6 +208,8 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
         /// </summary>
         private async Task SyncGmailAsync(int userId, bool incremental)
         {
+            var context = CreateDbContextScope();
+
             var syncLog = new SyncLog
             {
                 UserId = userId,
@@ -212,12 +217,12 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
                 Status = "Running",
                 StartedAt = DateTime.UtcNow
             };
-            _context.SyncLogs.Add(syncLog);
-            await _context.SaveChangesAsync();
+            context.SyncLogs.Add(syncLog);
+            await context.SaveChangesAsync();
 
             try
             {
-                var user = await _context.Users.FindAsync(userId);
+                var user = await context.Users.FindAsync(userId);
                 if (user == null) throw new Exception("User not found");
 
                 _logger.LogInformation("Syncing Gmail for user {UserId} (Incremental: {Inc})",
@@ -242,7 +247,7 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
                         progress: progress);
 
                 user.LastGmailSync = DateTime.UtcNow;
-                await _context.SaveChangesAsync();
+                await context.SaveChangesAsync();
 
                 // Update sync log
                 syncLog.Status = "Success";
@@ -250,7 +255,7 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
                 syncLog.ItemsAdded = newEmails;
                 syncLog.ItemsUpdated = updatedEmails;
                 syncLog.CompletedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync();
+                await context.SaveChangesAsync();
 
                 _logger.LogInformation("Gmail sync completed: {New} new, {Updated} updated, {Total} total",
                     newEmails, updatedEmails, totalProcessed);
@@ -262,10 +267,25 @@ namespace FinancialAdvisorAI.API.Services.BackgroundJobs
                 syncLog.Status = "Failed";
                 syncLog.ErrorMessage = ex.Message;
                 syncLog.CompletedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync();
+                await context.SaveChangesAsync();
 
                 throw;
             }
+            finally
+            {
+                context.Dispose();
+            }
+        }
+
+        private AppDbContext CreateDbContextScope()
+        {
+            var optionsBuilder = new DbContextOptionsBuilder<AppDbContext>();
+            var connectionString = _configuration.GetConnectionString("DefaultConnection");
+
+            optionsBuilder.UseSqlite(connectionString);
+
+            return new AppDbContext(optionsBuilder.Options);
+
         }
 
         /// <summary>

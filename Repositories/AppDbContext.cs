@@ -9,6 +9,13 @@ namespace FinancialAdvisorAI.API.Repositories
         {
         }
 
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        {
+            optionsBuilder.UseSqlite(option => option.CommandTimeout(30));
+
+            base.OnConfiguring(optionsBuilder);
+        }
+
         // Database tables
         public DbSet<User> Users { get; set; }
         public DbSet<ChatMessage> ChatMessages { get; set; }
