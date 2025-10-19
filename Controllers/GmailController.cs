@@ -26,7 +26,10 @@ namespace FinancialAdvisorAI.API.Controllers
         }
 
         [HttpPost("sync/{userId}")]
-        public async Task<IActionResult> SyncEmails(int userId, [FromQuery] int maxResults = 100)
+        public async Task<IActionResult> SyncEmails(
+     int userId,
+     [FromQuery] bool fullSync = false,
+     [FromQuery] int? maxResults = null)
         {
             try
             {
@@ -36,10 +39,60 @@ namespace FinancialAdvisorAI.API.Controllers
                     return NotFound(new { error = "User not found" });
                 }
 
-                _logger.LogInformation("Starting Gmail sync for user {UserId}", userId);
+                _logger.LogInformation("Starting Gmail sync for user {UserId} (FullSync: {FullSync})",
+                    userId, fullSync);
 
-                // Get messages from Gmail
-                var messages = await _emailService.ListMessagesAsync(user, maxResults);
+                List<Google.Apis.Gmail.v1.Data.Message> messages;
+
+                if (fullSync)
+                {
+                    // Full sync - get ALL emails
+                    _logger.LogInformation("Performing FULL Gmail sync (all emails)");
+
+                    var progress = new Progress<SyncProgress>(p =>
+                    {
+                        _logger.LogInformation("Sync progress: {Status}", p.Status);
+                    });
+
+                    messages = await _emailService.ListAllMessagesAsync(
+                        user,
+                        query: null,
+                        since: null,
+                        progress: progress);
+                }
+                else
+                {
+                    // Incremental sync - only new emails since last sync
+                    DateTime? since = user.LastGmailSync?.AddMinutes(-5); // 5 min overlap for safety
+
+                    if (since.HasValue)
+                    {
+                        _logger.LogInformation("Performing INCREMENTAL sync since {Since}", since);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("First sync - fetching last {Max} emails", maxResults ?? 100);
+                    }
+
+                    var progress = new Progress<SyncProgress>(p =>
+                    {
+                        _logger.LogInformation("Sync progress: {Status}", p.Status);
+                    });
+
+                    messages = await _emailService.ListAllMessagesAsync(
+                        user,
+                        query: null,
+                        since: since,
+                        progress: progress);
+
+                    // If no last sync and no maxResults specified, limit to 100 for safety
+                    if (!since.HasValue && !maxResults.HasValue)
+                    {
+                        messages = messages.Take(100).ToList();
+                    }
+                }
+
+                _logger.LogInformation("Processing {Count} emails", messages.Count);
 
                 int newEmails = 0;
                 int updatedEmails = 0;
@@ -74,13 +127,22 @@ namespace FinancialAdvisorAI.API.Controllers
                     {
                         updatedEmails++;
                     }
+
+                    // Save in batches to avoid memory issues
+                    if ((newEmails + updatedEmails) % 100 == 0)
+                    {
+                        await _context.SaveChangesAsync();
+                        _logger.LogInformation("Saved batch: {New} new, {Updated} updated",
+                            newEmails, updatedEmails);
+                    }
                 }
 
                 user.LastGmailSync = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
 
-                _logger.LogInformation("Gmail sync completed for user {UserId}. New: {New}, Updated: {Updated}",
-                    userId, newEmails, updatedEmails);
+                _logger.LogInformation(
+                    "Gmail sync completed for user {UserId}. New: {New}, Updated: {Updated}, Total: {Total}",
+                    userId, newEmails, updatedEmails, messages.Count);
 
                 return Ok(new
                 {
