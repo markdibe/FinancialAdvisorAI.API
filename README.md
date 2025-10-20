@@ -1,0 +1,597 @@
+# Financial Advisor AI - Backend API
+
+## Overview
+
+This is a comprehensive AI-powered backend system designed for financial advisors to manage client relationships, automate workflows, and leverage intelligent insights from their data. The system integrates with Google Workspace (Gmail & Calendar) and HubSpot CRM, using advanced AI capabilities including RAG (Retrieval-Augmented Generation) and autonomous agent features.
+
+## 🚀 Key Features
+
+### 1. **AI-Powered Chat Assistant**
+- Conversational AI interface using GPT-4
+- Context-aware responses leveraging user's emails, calendar, and CRM data
+- Tool calling capabilities for autonomous actions
+- Natural language understanding for complex queries
+
+### 2. **Google Workspace Integration**
+- **Gmail Sync**: Full and incremental email synchronization
+- **Calendar Management**: Event tracking and creation
+- OAuth 2.0 authentication with automatic token refresh
+- Rate-limited API calls to respect Google's quotas
+
+### 3. **HubSpot CRM Integration**
+- Contact, Company, and Deal synchronization
+- Create and update CRM records via AI commands
+- Automatic note-taking on contacts
+- Pipeline and deal stage management
+
+### 4. **Vector Database & Semantic Search (RAG)**
+- Qdrant vector database integration
+- Semantic search across all user data (emails, calendar, CRM)
+- Text embeddings using OpenAI's `text-embedding-3-small`
+- Context-aware responses with relevance scoring
+
+### 5. **Autonomous Agent System**
+- **Ongoing Instructions**: User-defined rules for automatic actions
+- **Proactive Monitoring**: Background jobs that watch for triggers
+- **Activity Logging**: Complete audit trail of autonomous actions
+- **Multi-trigger Support**: Email, Calendar, HubSpot, or combined triggers
+
+### 6. **Background Job Processing**
+- Hangfire-based job scheduling
+- Incremental sync every 3 hours
+- Full sync daily at 2 AM UTC
+- Retry logic with exponential backoff
+
+### 7. **Tool Execution Framework**
+- **send_email**: Send emails via Gmail
+- **create_calendar_event**: Schedule meetings with attendees
+- **create_hubspot_contact**: Add new CRM contacts
+- **update_hubspot_deal**: Modify deal stages and amounts
+- **add_hubspot_note**: Log notes on contacts
+
+---
+
+## 🏗️ Architecture
+
+### Technology Stack
+- **Framework**: ASP.NET Core 9.0
+- **Database**: SQLite with Entity Framework Core
+- **AI**: OpenAI GPT-4 and Embeddings API
+- **Vector DB**: Qdrant Cloud
+- **Background Jobs**: Hangfire
+- **Authentication**: Google OAuth 2.0, HubSpot OAuth
+
+### Project Structure
+
+```
+FinancialAdvisorAI.API/
+├── Controllers/           # API endpoints
+│   ├── AuthController.cs              # Google OAuth authentication
+│   ├── ChatController.cs              # AI chat interface
+│   ├── GmailController.cs             # Email management
+│   ├── CalendarController.cs          # Calendar operations
+│   ├── HubSpotController.cs           # CRM integration
+│   ├── InstructionsController.cs      # Autonomous agent rules
+│   ├── BackgroundJobController.cs     # Manual sync triggers
+│   └── VectorController.cs            # Vector sync management
+│
+├── Models/                # Data models
+│   ├── User.cs                        # User accounts
+│   ├── EmailCache.cs                  # Cached emails
+│   ├── CalendarEventCache.cs          # Cached events
+│   ├── ChatMessage.cs                 # Conversation history
+│   ├── OngoingInstruction.cs          # Agent instructions
+│   ├── AgentActivity.cs               # Activity logs
+│   ├── HubSpot*.cs                    # CRM entities
+│   └── DTOs/                          # Data transfer objects
+│
+├── Services/              # Business logic
+│   ├── AIChatService.cs               # GPT-4 integration
+│   ├── GoogleAuthService.cs           # OAuth management
+│   ├── EmailService.cs                # Gmail operations
+│   ├── EventService.cs                # Calendar operations
+│   ├── HubSpotService.cs              # CRM operations
+│   ├── EmbeddingService.cs            # Text embeddings
+│   ├── QdrantService.cs               # Vector database
+│   ├── VectorSyncService.cs           # Vector synchronization
+│   ├── ToolExecutorService.cs         # AI tool execution
+│   ├── ToolDefinitionService.cs       # Tool schemas
+│   ├── ProactiveAgentService.cs       # Autonomous agent
+│   └── BackgroundJobs/
+│       ├── SyncBackgroundJob.cs       # Data sync jobs
+│       └── ProactiveAgentJob.cs       # Agent execution jobs
+│
+├── Repositories/          # Data access
+│   └── AppDbContext.cs                # EF Core context
+│
+└── Migrations/            # Database migrations
+```
+
+---
+
+## 📊 Database Schema
+
+### Core Tables
+- **Users**: User accounts with OAuth tokens
+- **EmailCaches**: Cached Gmail messages
+- **CalendarEventCaches**: Cached Google Calendar events
+- **ChatMessages**: Conversation history
+- **OngoingInstructions**: User-defined automation rules
+- **AgentActivities**: Log of autonomous actions
+- **HubSpotContacts**: CRM contacts
+- **HubSpotCompanies**: CRM companies
+- **HubSpotDeals**: CRM deals
+- **SyncLogs**: Data synchronization history
+- **AgentTasks**: Pending tasks (future use)
+
+### Key Relationships
+- User → EmailCaches (1:N)
+- User → CalendarEventCaches (1:N)
+- User → ChatMessages (1:N)
+- User → OngoingInstructions (1:N)
+- OngoingInstruction → AgentActivities (1:N)
+
+---
+
+## 🔄 Data Synchronization Flow
+
+### Initial Sync (Full)
+1. User authenticates with Google/HubSpot
+2. Background job triggered automatically
+3. Fetches all historical data:
+   - Gmail: Past year to present
+   - Calendar: Past year to 2 years future
+   - HubSpot: All contacts, companies, deals
+4. Generates embeddings for all data
+5. Uploads vectors to Qdrant
+
+### Incremental Sync (Every 3 Hours)
+1. Fetches only new/updated items since last sync
+2. Updates database records
+3. Generates embeddings for new data
+4. Upserts vectors to Qdrant
+5. Updates sync timestamps
+
+### Sync Rate Limiting
+- **Gmail**: Max 5 concurrent requests, 50ms delay between
+- **Calendar**: 1-second delay between pages
+- **HubSpot**: 100ms delay between pages
+- **Embeddings**: Batch processing with 200ms delays
+
+---
+
+## 🤖 AI Chat System
+
+### Query Processing Pipeline
+
+1. **User Input** → User asks a question
+2. **Vector Search** → Generate embedding, search Qdrant
+3. **Context Building** → Gather relevant emails, events, CRM data
+4. **GPT-4 Completion** → Send context + query to GPT-4
+5. **Tool Decision** → AI decides if action needed
+6. **Tool Execution** → Execute requested tools
+7. **Response** → Return final answer to user
+
+### RAG (Retrieval-Augmented Generation)
+
+The system uses semantic search to find relevant information:
+
+```csharp
+// Example: User asks "What did John email me about?"
+1. Generate embedding for query
+2. Search Qdrant for similar vectors (emails from John)
+3. Retrieve top 10 most relevant results
+4. Build context with email content
+5. Ask GPT-4 to answer using context
+6. Return answer with citations
+```
+
+### Tool Calling
+
+The AI can autonomously perform actions:
+
+```
+User: "Send an email to john@example.com about the meeting tomorrow"
+
+AI Analysis:
+1. Recognizes intent: send email
+2. Calls tool: send_email
+3. Extracts parameters:
+   - to: john@example.com
+   - subject: "Tomorrow's Meeting"
+   - body: [generated content]
+4. Executes via EmailService
+5. Returns confirmation
+```
+
+---
+
+## 🎯 Autonomous Agent System
+
+### Ongoing Instructions
+
+Users can create rules for automatic actions:
+
+**Example 1: Email Auto-Response**
+```
+Instruction: "When someone emails about scheduling a meeting, 
+check my calendar and suggest 3 available times"
+
+Trigger: Email
+Priority: High
+Active: Yes
+```
+
+**Example 2: New Contact Welcome**
+```
+Instruction: "When a new contact is added to HubSpot, 
+send them a welcome email and schedule a follow-up call in 3 days"
+
+Trigger: HubSpot
+Priority: Medium
+Active: Yes
+```
+
+### Execution Flow
+
+1. **Background Job** runs every 5 minutes
+2. **Monitors** new emails, calendar events, CRM changes
+3. **Matches** data against active instructions
+4. **AI Decision** determines if instruction applies
+5. **Tool Execution** performs requested actions
+6. **Activity Log** records what was done
+
+### Activity Logging
+
+Every autonomous action is logged:
+- What was done
+- When it happened
+- Which instruction triggered it
+- Success/failure status
+- Error messages (if any)
+
+---
+
+## 🔧 API Endpoints
+
+### Authentication
+- `GET /api/auth/google/login` - Initiate Google OAuth
+- `POST /api/auth/google/callback` - Complete OAuth flow
+- `GET /api/auth/user/{userId}` - Get user info
+- `POST /api/auth/logout/{userId}` - Logout user
+
+### Chat
+- `POST /api/chat/send` - Send message to AI
+- `GET /api/chat/history/{userId}` - Get conversation history
+- `DELETE /api/chat/clear/{userId}` - Clear chat history
+
+### Gmail
+- `POST /api/gmail/sync/{userId}` - Trigger email sync
+- `GET /api/gmail/emails/{userId}` - Get cached emails
+- `GET /api/gmail/email/{userId}/{emailId}` - Get specific email
+- `POST /api/gmail/send` - Send email
+- `GET /api/gmail/sync-status/{userId}` - Check sync status
+
+### Calendar
+- `POST /api/calendar/sync/{userId}` - Trigger calendar sync
+- `GET /api/calendar/events/{userId}` - Get cached events
+- `GET /api/calendar/sync-status/{userId}` - Check sync status
+
+### HubSpot
+- `GET /api/hubspot/connect/{userId}` - Get OAuth URL
+- `POST /api/hubspot/callback` - Complete OAuth
+- `POST /api/hubspot/sync/{userId}` - Trigger CRM sync
+- `GET /api/hubspot/contacts/{userId}` - Get contacts
+- `GET /api/hubspot/companies/{userId}` - Get companies
+- `GET /api/hubspot/deals/{userId}` - Get deals
+- `GET /api/hubspot/status/{userId}` - Check connection
+
+### Instructions (Autonomous Agent)
+- `GET /api/instructions/user/{userId}` - Get all instructions
+- `POST /api/instructions` - Create instruction
+- `PUT /api/instructions/{id}` - Update instruction
+- `DELETE /api/instructions/{id}` - Delete instruction
+- `POST /api/instructions/{id}/toggle` - Enable/disable
+- `GET /api/instructions/activities/{userId}` - Get activity logs
+- `POST /api/instructions/activities/mark-read` - Mark as read
+
+### Background Jobs
+- `POST /api/backgroundjob/sync/incremental/{userId}` - Trigger incremental sync
+- `POST /api/backgroundjob/sync/full/{userId}` - Trigger full sync
+- `POST /api/backgroundjob/sync/all` - Sync all users
+- `GET /api/backgroundjob/logs/{userId}` - Get sync logs
+
+### Vector Database
+- `POST /api/vector/sync/{userId}` - Sync all data to vectors
+- `POST /api/vector/sync/emails/{userId}` - Sync emails only
+- `POST /api/vector/sync/calendar/{userId}` - Sync calendar only
+- `POST /api/vector/sync/hubspot/{userId}` - Sync HubSpot only
+- `GET /api/vector/status/{userId}` - Get sync status
+
+---
+
+## 🔐 Security & Authentication
+
+### Google OAuth 2.0
+- Authorization Code Flow
+- Offline access for refresh tokens
+- Automatic token refresh before expiry
+- Secure token storage in database
+
+### API Security
+- No authentication middleware (development)
+- User ID required for all operations
+- Token validation on external API calls
+- CORS enabled for frontend origin
+
+### Data Privacy
+- User data isolated by userId
+- No cross-user data access
+- Tokens encrypted in database (recommended for production)
+- Audit logs for autonomous actions
+
+---
+
+## 📦 Dependencies
+
+### Core Packages
+```xml
+<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.10" />
+<PackageReference Include="Betalgo.OpenAI" Version="8.7.2" />
+<PackageReference Include="Qdrant.Client" Version="1.15.1" />
+<PackageReference Include="Hangfire.AspNetCore" Version="1.8.21" />
+<PackageReference Include="Hangfire.Storage.SQLite" Version="0.4.2" />
+```
+
+### Google APIs
+```xml
+<PackageReference Include="Google.Apis.Auth" Version="1.72.0" />
+<PackageReference Include="Google.Apis.Gmail.v1" Version="1.70.0.3833" />
+<PackageReference Include="Google.Apis.Calendar.v3" Version="1.69.0.3746" />
+```
+
+### HubSpot
+```xml
+<PackageReference Include="RestSharp" Version="112.1.0" />
+```
+
+---
+
+## ⚙️ Configuration
+
+### appsettings.json
+
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Data Source=financialadvisor.db",
+    "HangfireConnection": "Data Source=hangfire.db"
+  },
+  "OpenAI": {
+    "ApiKey": "sk-...",
+    "EmbeddingModel": "text-embedding-3-small",
+    "ChatModel": "gpt-4o-mini"
+  },
+  "Qdrant": {
+    "Url": "https://your-cluster.qdrant.io",
+    "ApiKey": "your-api-key",
+    "CollectionName": "financial_advisor_data"
+  },
+  "Google": {
+    "ClientId": "your-client-id",
+    "ClientSecret": "your-client-secret",
+    "RedirectUri": "http://localhost:4200/auth/callback"
+  },
+  "Hubspot": {
+    "ClientId": "your-client-id",
+    "ClientSecret": "your-client-secret",
+    "RedirectUri": "http://localhost:4200/hubspot/callback",
+    "Scopes": "crm.objects.contacts.read crm.objects.contacts.write..."
+  },
+  "Frontend": {
+    "Url": "http://localhost:4200"
+  }
+}
+```
+
+---
+
+## 🚦 Getting Started
+
+### Prerequisites
+- .NET 9.0 SDK
+- OpenAI API key
+- Qdrant Cloud account
+- Google Cloud Project (OAuth credentials)
+- HubSpot Developer account (optional)
+
+### Installation
+
+1. **Clone the repository**
+```bash
+git clone <repository-url>
+cd FinancialAdvisorAI.API
+```
+
+2. **Configure appsettings.json**
+```bash
+cp appsettings.json appsettings.Development.json
+# Edit appsettings.Development.json with your credentials
+```
+
+3. **Run migrations**
+```bash
+dotnet ef database update
+```
+
+4. **Run the application**
+```bash
+dotnet run
+```
+
+5. **Access Hangfire Dashboard**
+```
+http://localhost:5288/hangfire
+```
+
+6. **Access Swagger UI**
+```
+http://localhost:5288/swagger
+```
+
+---
+
+## 🔄 Background Jobs
+
+### Scheduled Jobs
+
+**Incremental Sync (Every 3 Hours)**
+```csharp
+Cron: "0 0/3 * * *"
+Job: IncrementalSyncAllUsersAsync()
+```
+
+**Full Sync (Daily at 2 AM UTC)**
+```csharp
+Cron: "0 2 * * *"
+Job: FullSyncAllUsersAsync()
+```
+
+**Proactive Agent (Every 5 Minutes)**
+```csharp
+Cron: "*/5 * * * *"
+Job: RunProactiveAgentAsync()
+```
+
+### Manual Job Triggers
+
+Trigger jobs via API endpoints:
+```bash
+# Incremental sync for user
+POST /api/backgroundjob/sync/incremental/1
+
+# Full sync for user
+POST /api/backgroundjob/sync/full/1
+
+# Sync all users
+POST /api/backgroundjob/sync/all
+```
+
+---
+
+## 🧪 Testing
+
+### Manual Testing via Swagger
+
+1. Navigate to `/swagger`
+2. Test authentication flow
+3. Trigger sync operations
+4. Send chat messages
+5. Create instructions
+
+### Example Chat Queries
+
+```
+"What emails did I receive from John last week?"
+"Show me my meetings for tomorrow"
+"Send an email to sara@example.com about the Q4 report"
+"Create a meeting with john@example.com on Friday at 2pm"
+"What deals are in the pipeline stage?"
+```
+
+---
+
+## 📈 Performance Considerations
+
+### Rate Limiting
+- Gmail API: 250 quota units per user per second
+- Calendar API: 500 requests per 100 seconds
+- OpenAI: 10,000 TPM (tokens per minute)
+- Qdrant: Based on cluster size
+
+### Optimization Strategies
+- Batch vector upserts (100 at a time)
+- Concurrent API requests (max 5 for Gmail)
+- Incremental sync to reduce API calls
+- Caching frequently accessed data
+- WAL mode for SQLite
+
+### Scalability
+- Background jobs prevent UI blocking
+- Horizontal scaling via multiple Hangfire servers
+- Qdrant clustering for high volume
+- Connection pooling for database
+
+---
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**1. Google OAuth Fails**
+- Check redirect URI matches Google Console
+- Verify scopes are correct
+- Ensure tokens haven't expired
+
+**2. Qdrant Connection Errors**
+- Verify URL format (exclude https://)
+- Check API key
+- Ensure collection exists
+
+**3. Sync Jobs Not Running**
+- Check Hangfire dashboard
+- Verify cron expressions
+- Check server timezone (UTC)
+
+**4. SQLite Database Locked**
+- Enable WAL mode: `PRAGMA journal_mode=WAL;`
+- Increase timeout: `PRAGMA busy_timeout=30000;`
+- Check connection pooling
+
+---
+
+## 🔮 Future Enhancements
+
+### Planned Features
+- [ ] Multi-user authentication middleware
+- [ ] Real-time webhook integrations
+- [ ] Advanced analytics dashboard
+- [ ] Custom AI model fine-tuning
+- [ ] Multi-language support
+- [ ] Mobile app support
+- [ ] Slack/Teams integration
+- [ ] Document processing (PDFs, DOCs)
+- [ ] Voice interface
+- [ ] Predictive analytics
+
+---
+
+## 📝 License
+
+This project is proprietary. All rights reserved.
+
+---
+
+## 👥 Contributing
+
+This is a private project. Contact the repository owner for contribution guidelines.
+
+---
+
+## 📧 Support
+
+For issues, questions, or feature requests, please contact the development team.
+
+---
+
+## 🙏 Acknowledgments
+
+- OpenAI for GPT-4 and embeddings
+- Qdrant for vector database
+- Google for Workspace APIs
+- HubSpot for CRM integration
+- Hangfire for background jobs
+
+---
+
+**Built with ❤️ for Financial Advisors**
